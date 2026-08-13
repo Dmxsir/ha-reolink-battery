@@ -196,7 +196,15 @@ def decode_message_center_payload(
     payload: object, user_id: str = ""
 ) -> DecodedMessagePayload:
     """Decode the official Message Center STM v1 envelope or plaintext JSON."""
-    if isinstance(payload, dict) and payload.get("stm") == 1:
+    is_stm_v1 = isinstance(payload, dict) and (
+        payload.get("stm") == 1
+        or (
+            "stm" not in payload
+            and isinstance(payload.get("time"), (str, int))
+            and isinstance(payload.get("data"), str)
+        )
+    )
+    if is_stm_v1:
         timestamp = payload.get("time")
         encoded = payload.get("data")
         if not isinstance(timestamp, (str, int)) or not isinstance(encoded, str):
