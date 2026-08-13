@@ -80,6 +80,7 @@ def parse_cloud_events(payload: object, expected_uid: str) -> list[CloudEvent]:
     for message in _items(payload):
         event_id = message.get("id")
         uid = message.get("uid")
+        uid_matches = uid in {expected_uid, f"{expected_uid}_00"}
         alarm_at = message.get("alarmAt")
         raw = message.get("raw")
         alarm = raw.get("alarm") if isinstance(raw, dict) else None
@@ -95,7 +96,7 @@ def parse_cloud_events(payload: object, expected_uid: str) -> list[CloudEvent]:
         if (
             not isinstance(event_id, (str, int))
             or not isinstance(uid, str)
-            or uid != expected_uid
+            or not uid_matches
             or alarm_at is None
             or (alarm_type not in MEANINGFUL_ALARM_TYPES and not ai)
         ):
@@ -105,7 +106,7 @@ def parse_cloud_events(payload: object, expected_uid: str) -> list[CloudEvent]:
         except (ValueError, OverflowError, OSError):
             continue
         events.append(
-            CloudEvent(str(event_id), uid, alarm_time, alarm_type, ai)
+            CloudEvent(str(event_id), expected_uid, alarm_time, alarm_type, ai)
         )
     return events
 

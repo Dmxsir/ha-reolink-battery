@@ -9,6 +9,6 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Dmxsir/ha-reolink-battery/issues",
   "loggers": ["reolink_aio"],
-  "requirements": ["reolink-aio==0.21.8"],
-  "version": "0.1.0-alpha.1"
+  "requirements": ["pycryptodomex==3.23.0", "reolink-aio==0.21.8"],
+  "version": "0.1.0-alpha.2"
 }

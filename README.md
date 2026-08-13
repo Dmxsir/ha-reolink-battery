@@ -20,15 +20,15 @@ Motion event
 
 This project is an **alpha** and is not production ready.
 
-Milestone 3A is complete: the integration loads, provides an account/device
-config flow, validates a short battery-safe local camera session, polls the
-cloud event path, deduplicates decoded events, and persists them in a bounded
-pending queue.
+Milestone 3A is in live validation: the integration loads, provides an
+account/device config flow, validates a short battery-safe local camera
+session, polls the cloud Message Center, decodes its STM v1 response,
+deduplicates normalized events, and persists them in a bounded pending queue.
 
 Automatic motion-to-recording download and Telegram delivery are still under
 development. The pending queue currently has no camera worker, so a cloud event
-cannot wake the camera or download a recording. The live Message Center STM v1
-response decoder also requires final cloud-only validation.
+cannot wake the camera or download a recording. Message Center polling remains
+cloud-only and does not use the separately stored camera-local password.
 
 ## HACS installation
 
