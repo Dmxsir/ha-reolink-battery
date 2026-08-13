@@ -1,0 +1,35 @@
+# Python and test environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Home Assistant and local development
+.storage/
+.env
+.idea/
+.vscode/
+*.log
+
+# Credentials and key material
+*password*
+*token*
+*.key
+*.pem
+
+# Captures, media, and proprietary binaries
+downloads/
+*.partial
+*.mp4
+*.pcap
+*.pcapng
+*.etl
+*.dll
+*.exe
+*.apk
+
+# Platform metadata
+.DS_Store
+Thumbs.db

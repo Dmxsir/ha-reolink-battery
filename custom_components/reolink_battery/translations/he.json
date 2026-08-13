@@ -1,0 +1,51 @@
+{
+  "title": "Reolink Battery",
+  "config": {
+    "step": {
+      "user": {
+        "title": "חשבון Reolink",
+        "description": "התחבר כדי לגלות את מצלמות הסוללה. שלב זה אינו פונה למצלמה ואינו מעיר אותה.",
+        "data": {
+          "email": "דוא״ל החשבון",
+          "password": "סיסמת החשבון"
+        }
+      },
+      "mfa": {
+        "title": "אימות דו־שלבי",
+        "description": "הזן את קוד האימות שנשלח על ידי Reolink.",
+        "data": {
+          "code": "קוד אימות"
+        }
+      },
+      "device": {
+        "title": "בחירת מצלמה",
+        "description": "בחר את מצלמת הסוללה שברצונך להוסיף.",
+        "data": {
+          "uid": "מצלמה"
+        }
+      },
+      "local": {
+        "title": "פרטי התחברות מקומיים למצלמה",
+        "description": "הזן את פרטי מנהל המצלמה. האימות פותח חיבור Baichuan קצר וסוגר אותו מיד; ללא תצוגה חיה, RTSP, ONVIF, HTTP או תמונות מצב.",
+        "data": {
+          "username": "שם משתמש מקומי",
+          "password": "סיסמה מקומית",
+          "interface": "ממשק LAN פיזי"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "פרטי חשבון Reolink או קוד האימות נדחו.",
+      "cannot_connect": "לא ניתן להתחבר לענן Reolink.",
+      "invalid_device_auth": "פרטי ההתחברות המקומיים למצלמה נדחו.",
+      "cannot_connect_device": "לא ניתן לאתר, להעיר או להתחבר למצלמה דרך ה־LAN שנבחר.",
+      "unknown": "שגיאה לא צפויה. בדוק ביומן את סוג הכשל."
+    },
+    "abort": {
+      "already_configured": "המצלמה כבר מוגדרת.",
+      "no_devices": "לא נמצאו בחשבון התקני Reolink קשורים ונתמכים.",
+      "no_lan_interface": "לא נמצא ב־Home Assistant ממשק LAN פרטי מתאים עם IPv4.",
+      "unsupported_auth_path": "אבן דרך זו תומכת רק במסלול האישורים המקומיים שאומת."
+    }
+  }
+}
