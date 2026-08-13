@@ -64,11 +64,20 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(enveloped.payload, {"items": []})
 
     def test_malformed_stm_is_rejected(self):
-        with self.assertRaises(cloud.CloudEventDecodeError):
+        with self.assertRaises(cloud.CloudEventDecodeError) as caught:
             cloud.decode_message_center_payload(
                 {"stm": 1, "time": "1786640000000", "data": "not-base64"},
                 "user-1",
             )
+        self.assertEqual(caught.exception.reason, "invalid_stm_v1")
+        self.assertTrue(caught.exception.wrapped)
+
+    def test_user_profile_id_extraction(self):
+        self.assertEqual(cloud.user_id_from_payload({"id": "user-1"}), "user-1")
+        self.assertEqual(
+            cloud.user_id_from_payload({"data": {"user": {"id": "user-2"}}}),
+            "user-2",
+        )
 
 
 class EventTests(unittest.TestCase):
@@ -152,6 +161,18 @@ class _FakeSession:
 
 
 class RequestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_official_user_profile_request(self):
+        session = _FakeSession({"id": "user-1"})
+        user_id = await cloud.ReolinkCloudClient(session).async_query_user_id(
+            "access-token"
+        )
+        method, url, kwargs = session.request_data
+        self.assertEqual(user_id, "user-1")
+        self.assertEqual(method, "GET")
+        self.assertTrue(url.endswith("/v1.0/users/@me/profile/"))
+        self.assertIsNone(kwargs["json"])
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer access-token")
+
     async def test_bounded_official_request_shape_and_page_telemetry(self):
         session = _FakeSession(MESSAGE_CENTER_STM_V1_FIXTURE)
         page = await cloud.ReolinkCloudClient(session).async_query_events(

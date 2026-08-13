@@ -42,6 +42,8 @@ async def async_get_config_entry_diagnostics(
             "processed_count": coordinator.processed_event_count,
             "last_failure_stage": coordinator.last_failure_stage or None,
             "last_failure_type": coordinator.last_failure_type or None,
+            "last_failure_reason": coordinator.last_failure_reason or None,
+            "cloud_user_id_present": coordinator.cloud_user_id_present,
             "message_center_http_status": coordinator.last_http_status,
             "message_center_wrapped": coordinator.last_response_wrapped,
             "message_center_items": coordinator.last_item_count,

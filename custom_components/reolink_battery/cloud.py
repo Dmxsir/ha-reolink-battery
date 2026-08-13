@@ -21,6 +21,7 @@ API_BASE = "https://apis.reolink.com"
 CLIENT_ID = "REO-aPOx]dxqdnaWBChRZprp"
 USER_AGENT = "ReolinkAndroid App/4.61.0.3.20260721 (reolink-battery; Android/REL)"
 TOKEN_PATH = "/v1.0/oauth2/token/"
+USER_PROFILE_PATH = "/v1.0/users/@me/profile/"
 MAX_RESPONSE_BYTES = 1_000_000
 
 
@@ -47,6 +48,18 @@ class MfaRequiredError(CloudError):
 
 class CloudEventDecodeError(CloudError):
     """The Message Center response needs an unsupported decoder."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        wrapped: bool | None = None,
+        status: int = 0,
+    ) -> None:
+        super().__init__(message, status=status)
+        self.reason = reason
+        self.wrapped = wrapped
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +168,18 @@ def tokens_from_payload(payload: object) -> CloudTokens:
     )
 
 
+def user_id_from_payload(payload: object) -> str:
+    """Extract only the account id required by the official STM v1 decoder."""
+    user_id = _nested(payload, "id", "userId", "user_id")
+    if user_id is None:
+        user = _nested(payload, "user")
+        if isinstance(user, dict):
+            user_id = user.get("id")
+    if not isinstance(user_id, (str, int)) or not str(user_id):
+        raise CloudError("Reolink user profile did not contain an account id")
+    return str(user_id)
+
+
 def devices_from_payload(payload: object) -> list[CloudDevice]:
     """Parse only the device fields required by the integration."""
     items = _nested(payload, "items")
@@ -208,7 +233,11 @@ def decode_message_center_payload(
         timestamp = payload.get("time")
         encoded = payload.get("data")
         if not isinstance(timestamp, (str, int)) or not isinstance(encoded, str):
-            raise CloudEventDecodeError("Message Center returned malformed STM v1")
+            raise CloudEventDecodeError(
+                "Message Center returned malformed STM v1",
+                reason="malformed_stm_v1",
+                wrapped=True,
+            )
         try:
             digest = hmac.new(
                 str(timestamp).encode(),
@@ -231,14 +260,24 @@ def decode_message_center_payload(
             ValueError,
         ) as exc:
             raise CloudEventDecodeError(
-                "Message Center returned invalid STM v1"
+                "Message Center returned invalid STM v1",
+                reason="invalid_stm_v1",
+                wrapped=True,
             ) from exc
         if not isinstance(decoded, (dict, list)):
-            raise CloudEventDecodeError("Message Center STM v1 was not a document")
+            raise CloudEventDecodeError(
+                "Message Center STM v1 was not a document",
+                reason="stm_v1_not_document",
+                wrapped=True,
+            )
         return DecodedMessagePayload(decoded, True)
 
     if isinstance(payload, dict) and "stm" in payload:
-        raise CloudEventDecodeError("Message Center returned unsupported STM version")
+        raise CloudEventDecodeError(
+            "Message Center returned unsupported STM version",
+            reason="unsupported_stm_version",
+            wrapped=True,
+        )
     if isinstance(payload, (dict, list)):
         value = payload.get("data") if isinstance(payload, dict) else payload
         if isinstance(value, (dict, list)):
@@ -252,11 +291,17 @@ def decode_message_center_payload(
             decoded = json.loads(payload)
         except json.JSONDecodeError as exc:
             raise CloudEventDecodeError(
-                "Message Center returned unsupported plaintext"
+                "Message Center returned unsupported plaintext",
+                reason="unsupported_plaintext",
+                wrapped=False,
             ) from exc
         if isinstance(decoded, (dict, list)):
             return DecodedMessagePayload(decoded, False)
-    raise CloudEventDecodeError("Message Center returned an unsupported payload")
+    raise CloudEventDecodeError(
+        "Message Center returned an unsupported payload",
+        reason="unsupported_payload",
+        wrapped=False,
+    )
 
 
 def decoded_message_payload(payload: object, user_id: str = "") -> object:
@@ -505,6 +550,17 @@ class ReolinkCloudClient:
         )
         return devices_from_payload(payload)
 
+    async def async_query_user_id(self, access_token: str) -> str:
+        """Fetch the account id used by the official Message Center decoder."""
+        return user_id_from_payload(
+            await self._request_json(
+                "GET",
+                USER_PROFILE_PATH,
+                access_token=access_token,
+                extra_headers={"Content-Type": "application/json"},
+            )
+        )
+
     async def async_query_events(
         self,
         access_token: str,
@@ -529,7 +585,11 @@ class ReolinkCloudClient:
             },
             access_token=access_token,
         )
-        decoded = decode_message_center_payload(response.payload, user_id)
+        try:
+            decoded = decode_message_center_payload(response.payload, user_id)
+        except CloudEventDecodeError as err:
+            err.status = response.status
+            raise
         item_count, token_present = _message_page_metadata(decoded.payload)
         return CloudEventPage(
             decoded.payload,

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .cloud import CloudTokens, ReolinkCloudClient
+from .cloud import CloudEventDecodeError, CloudTokens, ReolinkCloudClient
 from .const import DEFAULT_EVENT_WINDOW, DEFAULT_POLL_INTERVAL, DOMAIN, STORAGE_VERSION
 from .events import CloudEvent, EventQueue, parse_cloud_events
 
@@ -49,6 +49,7 @@ class ReolinkBatteryCoordinator:
         self.last_successful_event_time: datetime | None = None
         self.last_failure_stage = ""
         self.last_failure_type = ""
+        self.last_failure_reason = ""
         self.last_poll_time: datetime | None = None
         self.last_http_status: int | None = None
         self.last_response_wrapped: bool | None = None
@@ -59,6 +60,7 @@ class ReolinkBatteryCoordinator:
         self.last_event_id_present = False
         self.last_event_uid_match = False
         self.last_event_queued = False
+        self.cloud_user_id_present = bool(tokens.user_id)
 
     @property
     def pending_events(self) -> tuple[CloudEvent, ...]:
@@ -77,17 +79,33 @@ class ReolinkBatteryCoordinator:
 
     async def _async_ensure_session(self) -> None:
         now = datetime.now(UTC).timestamp()
+        changed = False
         if self._tokens.access_token and (
             not self._tokens.expires_at or self._tokens.expires_at > now + 60
         ):
-            return
-        if self._tokens.refresh_token:
+            pass
+        elif self._tokens.refresh_token:
             self._tokens = await self._cloud.async_refresh_session(self._tokens)
+            changed = True
         else:
             self._tokens = await self._cloud.async_password_grant(
                 self._email, self._account_password, self._tokens.mfa_trust_token
             )
-        self._update_tokens(self._tokens)
+            changed = True
+        if not self._tokens.user_id:
+            self._tokens = CloudTokens(
+                access_token=self._tokens.access_token,
+                refresh_token=self._tokens.refresh_token,
+                mfa_trust_token=self._tokens.mfa_trust_token,
+                user_id=await self._cloud.async_query_user_id(
+                    self._tokens.access_token
+                ),
+                expires_at=self._tokens.expires_at,
+            )
+            changed = True
+        self.cloud_user_id_present = bool(self._tokens.user_id)
+        if changed:
+            self._update_tokens(self._tokens)
 
     async def async_ingest_events(self, events: list[CloudEvent]) -> int:
         """Add decoded events to the persistent 3A queue."""
@@ -143,13 +161,23 @@ class ReolinkBatteryCoordinator:
                 _LOGGER.info("EVENT_ALARM_TYPE=%s", event.alarm_type)
                 _LOGGER.info("EVENT_AI_TYPES=%s", ",".join(event.ai_types))
                 _LOGGER.info("EVENT_QUEUED=%s", int(self.last_event_queued))
+        except CloudEventDecodeError as err:
+            self.last_http_status = err.status or None
+            self.last_response_wrapped = err.wrapped
+            self.last_failure_stage = "CLOUD_EVENT_ERROR"
+            self.last_failure_type = type(err).__name__
+            self.last_failure_reason = err.reason
+            _LOGGER.debug("Cloud event decode failed: %s", err.reason)
+            return 0
         except Exception as err:  # noqa: BLE001 - poller must survive cloud outages.
             self.last_failure_stage = "CLOUD_EVENT_ERROR"
             self.last_failure_type = type(err).__name__
+            self.last_failure_reason = "cloud_request_failed"
             _LOGGER.debug("Cloud event poll failed: %s", type(err).__name__)
             return 0
         self.last_failure_stage = ""
         self.last_failure_type = ""
+        self.last_failure_reason = ""
         return added
 
     async def async_run(self) -> None:
