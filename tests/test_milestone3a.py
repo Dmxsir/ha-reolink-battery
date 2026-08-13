@@ -33,8 +33,7 @@ const = load_module("const")
 cloud = load_module("cloud")
 events = load_module("events")
 
-STM_V1_FIXTURE = {
-    "stm": 1,
+MESSAGE_CENTER_STM_V1_FIXTURE = {
     "time": "1786640000000",
     "data": (
         "XTN221HA1PR/wxM21plE6h2zyyH9LgPi72cbzJksBeopKb5zUao5pLbb0V14QowT"
@@ -48,7 +47,9 @@ STM_V1_FIXTURE = {
 
 class DecoderTests(unittest.TestCase):
     def test_live_equivalent_stm_v1_fixture(self):
-        decoded = cloud.decode_message_center_payload(STM_V1_FIXTURE, "user-1")
+        decoded = cloud.decode_message_center_payload(
+            MESSAGE_CENTER_STM_V1_FIXTURE, "user-1"
+        )
         self.assertTrue(decoded.wrapped)
         self.assertEqual(decoded.payload["items"][0]["id"], "event-wrapper")
         self.assertEqual(decoded.payload["nextToken"], "page-2")
@@ -152,7 +153,7 @@ class _FakeSession:
 
 class RequestTests(unittest.IsolatedAsyncioTestCase):
     async def test_bounded_official_request_shape_and_page_telemetry(self):
-        session = _FakeSession(STM_V1_FIXTURE)
+        session = _FakeSession(MESSAGE_CENTER_STM_V1_FIXTURE)
         page = await cloud.ReolinkCloudClient(session).async_query_events(
             "access-token",
             "user-1",
