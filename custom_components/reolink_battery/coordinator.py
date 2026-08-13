@@ -48,7 +48,17 @@ class ReolinkBatteryCoordinator:
         self._stopped = asyncio.Event()
         self.last_successful_event_time: datetime | None = None
         self.last_failure_stage = ""
+        self.last_failure_type = ""
         self.last_poll_time: datetime | None = None
+        self.last_http_status: int | None = None
+        self.last_response_wrapped: bool | None = None
+        self.last_item_count = 0
+        self.last_next_token_present: bool | None = None
+        self.last_event_type = ""
+        self.last_event_ai_types: tuple[str, ...] = ()
+        self.last_event_id_present = False
+        self.last_event_uid_match = False
+        self.last_event_queued = False
 
     @property
     def pending_events(self) -> tuple[CloudEvent, ...]:
@@ -60,6 +70,10 @@ class ReolinkBatteryCoordinator:
 
     async def async_initialize(self) -> None:
         self._queue.load(await self._store.async_load())
+        if self._queue.pending:
+            self.last_successful_event_time = max(
+                event.alarm_time for event in self._queue.pending
+            )
 
     async def _async_ensure_session(self) -> None:
         now = datetime.now(UTC).timestamp()
@@ -89,22 +103,53 @@ class ReolinkBatteryCoordinator:
         """Poll one recent cloud-only window and enqueue new events."""
         now = datetime.now(UTC)
         self.last_poll_time = now
+        self.last_event_queued = False
+        _LOGGER.info("MESSAGE_CENTER_POLL_START")
         try:
             await self._async_ensure_session()
-            payload = await self._cloud.async_query_events(
+            page = await self._cloud.async_query_events(
                 self._tokens.access_token,
+                self._tokens.user_id,
                 self._uid,
                 now - DEFAULT_EVENT_WINDOW,
                 now,
             )
-            added = await self.async_ingest_events(
-                parse_cloud_events(payload, self._uid)
+            self.last_http_status = page.http_status
+            self.last_response_wrapped = page.wrapped
+            self.last_item_count = page.item_count
+            self.last_next_token_present = page.next_token_present
+            _LOGGER.info("MESSAGE_CENTER_HTTP_STATUS=%s", page.http_status)
+            _LOGGER.info("MESSAGE_CENTER_WRAPPED=%s", int(page.wrapped))
+            _LOGGER.info("MESSAGE_CENTER_ITEMS=%s", page.item_count)
+            _LOGGER.info(
+                "MESSAGE_CENTER_NEXT_TOKEN_PRESENT=%s",
+                int(page.next_token_present),
             )
+            events = parse_cloud_events(page.payload, self._uid)
+            added = await self.async_ingest_events(events)
+            if events:
+                event = events[0]
+                self.last_event_id_present = True
+                self.last_event_uid_match = event.uid == self._uid
+                self.last_event_type = event.alarm_type
+                self.last_event_ai_types = event.ai_types
+                self.last_event_queued = any(
+                    pending.event_id == event.event_id
+                    for pending in self._queue.pending
+                )
+                _LOGGER.info("EVENT_ID_PRESENT=1")
+                _LOGGER.info("EVENT_UID_MATCH=%s", int(self.last_event_uid_match))
+                _LOGGER.info("EVENT_ALARM_AT=%s", event.alarm_time.isoformat())
+                _LOGGER.info("EVENT_ALARM_TYPE=%s", event.alarm_type)
+                _LOGGER.info("EVENT_AI_TYPES=%s", ",".join(event.ai_types))
+                _LOGGER.info("EVENT_QUEUED=%s", int(self.last_event_queued))
         except Exception as err:  # noqa: BLE001 - poller must survive cloud outages.
             self.last_failure_stage = "CLOUD_EVENT_ERROR"
+            self.last_failure_type = type(err).__name__
             _LOGGER.debug("Cloud event poll failed: %s", type(err).__name__)
             return 0
         self.last_failure_stage = ""
+        self.last_failure_type = ""
         return added
 
     async def async_run(self) -> None:

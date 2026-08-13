@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from aiohttp import ClientError, ClientSession
+from Cryptodome.Cipher import AES
 
 from .const import MESSAGE_CENTER_PATH
 
@@ -78,6 +83,31 @@ class CloudDevice:
         if not cloud_capable and self.status.casefold() == "bound":
             return "legacy_local_credential"
         return "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class DecodedMessagePayload:
+    """Decoded Message Center response and its observed transport wrapper."""
+
+    payload: object
+    wrapped: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CloudEventPage:
+    """One bounded Message Center page with secret-safe telemetry."""
+
+    payload: object
+    http_status: int
+    wrapped: bool
+    item_count: int
+    next_token_present: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _CloudHttpResponse:
+    payload: object
+    status: int
 
 
 def _nested(payload: object, *keys: str) -> Any:
@@ -162,26 +192,88 @@ def devices_from_payload(payload: object) -> list[CloudDevice]:
     return devices
 
 
-def decoded_message_payload(payload: object) -> object:
-    """Return an already-decoded Message Center document.
-
-    The official app may wrap this endpoint in STM v1 encryption. Milestone 3A
-    accepts synthetic decoded events, so encrypted responses fail explicitly
-    instead of guessing at cryptographic framing.
-    """
-    value = payload.get("data") if isinstance(payload, dict) else payload
-    if isinstance(value, (dict, list)):
-        return value
-    if isinstance(value, str):
+def decode_message_center_payload(
+    payload: object, user_id: str = ""
+) -> DecodedMessagePayload:
+    """Decode the official Message Center STM v1 envelope or plaintext JSON."""
+    if isinstance(payload, dict) and payload.get("stm") == 1:
+        timestamp = payload.get("time")
+        encoded = payload.get("data")
+        if not isinstance(timestamp, (str, int)) or not isinstance(encoded, str):
+            raise CloudEventDecodeError("Message Center returned malformed STM v1")
         try:
-            decoded = json.loads(value)
+            digest = hmac.new(
+                str(timestamp).encode(),
+                (user_id or "REOLINK_GUEST").encode(),
+                hashlib.sha256,
+            ).digest()
+            ciphertext = base64.b64decode(encoded, validate=True)
+            plaintext = AES.new(
+                digest[:16],
+                AES.MODE_CFB,
+                iv=digest[16:],
+                segment_size=128,
+            ).decrypt(ciphertext)
+            decoded = json.loads(plaintext.decode())
+        except (
+            binascii.Error,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise CloudEventDecodeError(
+                "Message Center returned invalid STM v1"
+            ) from exc
+        if not isinstance(decoded, (dict, list)):
+            raise CloudEventDecodeError("Message Center STM v1 was not a document")
+        return DecodedMessagePayload(decoded, True)
+
+    if isinstance(payload, dict) and "stm" in payload:
+        raise CloudEventDecodeError("Message Center returned unsupported STM version")
+    if isinstance(payload, (dict, list)):
+        value = payload.get("data") if isinstance(payload, dict) else payload
+        if isinstance(value, (dict, list)):
+            return DecodedMessagePayload(value, False)
+        if isinstance(payload, dict) and any(
+            key in payload for key in ("items", "messages", "msgs", "list")
+        ):
+            return DecodedMessagePayload(payload, False)
+    if isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
         except json.JSONDecodeError as exc:
             raise CloudEventDecodeError(
-                "Message Center returned an encrypted or unknown STM payload"
+                "Message Center returned unsupported plaintext"
             ) from exc
         if isinstance(decoded, (dict, list)):
-            return decoded
+            return DecodedMessagePayload(decoded, False)
     raise CloudEventDecodeError("Message Center returned an unsupported payload")
+
+
+def decoded_message_payload(payload: object, user_id: str = "") -> object:
+    """Compatibility helper returning only the decoded document."""
+    return decode_message_center_payload(payload, user_id).payload
+
+
+def _message_page_metadata(payload: object) -> tuple[int, bool]:
+    value = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(value, (dict, list)):
+        value = payload
+    if isinstance(value, list):
+        return len(value), False
+    if not isinstance(value, dict):
+        return 0, False
+    items = next(
+        (
+            candidate
+            for key in ("items", "messages", "msgs", "list")
+            if isinstance(candidate := value.get(key), list)
+        ),
+        [],
+    )
+    token = value.get("nextToken")
+    return len(items), isinstance(token, str) and bool(token)
 
 
 class ReolinkCloudClient:
@@ -196,7 +288,7 @@ class ReolinkCloudClient:
             "X-Client-Id": CLIENT_ID,
         }
 
-    async def _request_json(
+    async def _request_json_response(
         self,
         method: str,
         path: str,
@@ -205,7 +297,7 @@ class ReolinkCloudClient:
         form: dict[str, str] | None = None,
         access_token: str = "",
         extra_headers: dict[str, str] | None = None,
-    ) -> object:
+    ) -> _CloudHttpResponse:
         headers = dict(self._headers)
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
@@ -242,7 +334,28 @@ class ReolinkCloudClient:
                 status=status,
             ) from exc
         self._raise_error(status, payload)
-        return payload
+        return _CloudHttpResponse(payload, status)
+
+    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, object] | None = None,
+        form: dict[str, str] | None = None,
+        access_token: str = "",
+        extra_headers: dict[str, str] | None = None,
+    ) -> object:
+        return (
+            await self._request_json_response(
+                method,
+                path,
+                json_body=json_body,
+                form=form,
+                access_token=access_token,
+                extra_headers=extra_headers,
+            )
+        ).payload
 
     @staticmethod
     def _raise_error(status: int, payload: object) -> None:
@@ -387,24 +500,33 @@ class ReolinkCloudClient:
     async def async_query_events(
         self,
         access_token: str,
+        user_id: str,
         uid: str,
         start: datetime,
         end: datetime,
-    ) -> object:
+    ) -> CloudEventPage:
         """Fetch one recent Message Center page; nextToken is not a cursor."""
-        payload = await self._request_json(
+        response = await self._request_json_response(
             "POST",
             MESSAGE_CENTER_PATH,
             json_body={
                 "timeRanges": [
                     {
-                        "start": int(start.timestamp() * 1000),
-                        "end": int(end.timestamp() * 1000),
+                        "startAt": int(start.timestamp() * 1000),
+                        "endAt": int(end.timestamp() * 1000),
                     }
                 ],
-                "uids": [uid],
-                "alarmTypes": ["AI", "MD", "PEOPLE"],
+                "uids": [f"{uid}_00"],
+                "alarmTypes": [],
             },
             access_token=access_token,
         )
-        return decoded_message_payload(payload)
+        decoded = decode_message_center_payload(response.payload, user_id)
+        item_count, token_present = _message_page_metadata(decoded.payload)
+        return CloudEventPage(
+            decoded.payload,
+            response.status,
+            decoded.wrapped,
+            item_count,
+            token_present,
+        )

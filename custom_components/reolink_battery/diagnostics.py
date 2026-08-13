@@ -41,6 +41,18 @@ async def async_get_config_entry_diagnostics(
             "pending_count": len(coordinator.pending_events),
             "processed_count": coordinator.processed_event_count,
             "last_failure_stage": coordinator.last_failure_stage or None,
+            "last_failure_type": coordinator.last_failure_type or None,
+            "message_center_http_status": coordinator.last_http_status,
+            "message_center_wrapped": coordinator.last_response_wrapped,
+            "message_center_items": coordinator.last_item_count,
+            "message_center_next_token_present": (
+                coordinator.last_next_token_present
+            ),
+            "last_cloud_event_type": coordinator.last_event_type or None,
+            "last_cloud_event_ai_types": list(coordinator.last_event_ai_types),
+            "last_event_id_present": coordinator.last_event_id_present,
+            "last_event_uid_match": coordinator.last_event_uid_match,
+            "last_event_queued": coordinator.last_event_queued,
         },
         "milestone": "3A",
         "camera_worker_enabled": False,
