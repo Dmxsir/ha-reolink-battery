@@ -59,6 +59,9 @@
     },
     "binary_sensor": {
       "charging": {"name": "Charging"}
+    },
+    "button": {
+      "refresh_device_status": {"name": "Refresh device status"}
     }
   }
 }

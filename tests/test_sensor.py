@@ -25,6 +25,7 @@ class _Value(StrEnum):
     MEASUREMENT = "measurement"
     DIAGNOSTIC = "diagnostic"
     BYTES = "B"
+    GIGABYTES = "GB"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -35,6 +36,7 @@ class _Description:
     state_class: object | None = None
     native_unit_of_measurement: object | None = None
     entity_category: object | None = None
+    suggested_display_precision: int | None = None
 
 
 class _SensorEntity:
@@ -166,9 +168,20 @@ class SensorTests(unittest.TestCase):
         cache.update_local(local)
         values = {entity.entity_description.key: entity.native_value for entity in entities}
         self.assertEqual(values["battery"], 100)
-        self.assertEqual(values["storage_total"], 14_857_000_000)
-        self.assertEqual(values["storage_used"], 14_311_000_000)
-        self.assertEqual(values["storage_free"], 546_000_000)
+        self.assertEqual(values["storage_total"], 14.857)
+        self.assertEqual(values["storage_used"], 14.311)
+        self.assertEqual(values["storage_free"], 0.546)
+        storage_entities = entities[1:4]
+        self.assertTrue(
+            all(
+                entity.entity_description.native_unit_of_measurement == "GB"
+                and entity.entity_description.suggested_display_precision == 2
+                for entity in storage_entities
+            )
+        )
+        self.assertEqual(local.storage.total_bytes, 14_857_000_000)
+        self.assertEqual(local.storage.used_bytes, 14_311_000_000)
+        self.assertEqual(local.storage.free_bytes, 546_000_000)
         self.assertEqual(values["wifi_signal"], -30)
         self.assertEqual(values["last_local_refresh"], local.refreshed_at)
         self.assertTrue(all(entity.available for entity in entities))

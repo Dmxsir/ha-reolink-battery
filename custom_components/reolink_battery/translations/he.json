@@ -59,6 +59,9 @@
     },
     "binary_sensor": {
       "charging": {"name": "בטעינה"}
+    },
+    "button": {
+      "refresh_device_status": {"name": "רענון מצב המצלמה"}
     }
   }
 }

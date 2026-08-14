@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +25,16 @@ from .transport import (
     resolve_uid_lan,
     validate_local_lan_route,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class CameraStageError(RuntimeError):
+    """A secret-safe local camera failure stage."""
+
+    def __init__(self, stage: str) -> None:
+        super().__init__(stage)
+        self.stage = stage
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +64,9 @@ async def async_get_battery_state(host: Host) -> BatteryState | None:
     return parse_battery_info(host._battery.get(0))
 
 
-async def async_collect_local_state(host: Host) -> LocalState | None:
+async def async_collect_local_state(
+    host: Host, *, include_device_info: bool = True
+) -> LocalState | None:
     """Collect optional status while an authenticated session is already open."""
     info = None
     battery = None
@@ -62,28 +75,29 @@ async def async_collect_local_state(host: Host) -> LocalState | None:
     refreshed = False
     prepare_standalone_channel_zero(host)
     try:
-        info = await host.baichuan.get_info()
-        refreshed = True
-    except ReolinkError:
-        pass
-    try:
         await host.baichuan.get_battery_info(0)
         battery = host._battery.get(0)
         refreshed = True
     except ReolinkError:
-        pass
+        _LOGGER.warning("BATTERY_QUERY_ERROR")
     try:
         await host.baichuan.GetHddInfo()
         storage = host.hdd_info
         refreshed = True
     except ReolinkError:
-        pass
+        _LOGGER.warning("STORAGE_QUERY_ERROR")
     try:
         await host.baichuan.get_wifi_signal()
         wifi = host.wifi_signal()
         refreshed = True
     except ReolinkError:
-        pass
+        _LOGGER.warning("WIFI_QUERY_ERROR")
+    if include_device_info:
+        try:
+            info = await host.baichuan.get_info()
+            refreshed = True
+        except ReolinkError:
+            _LOGGER.warning("DEVICE_INFO_QUERY_ERROR")
     if not refreshed:
         return None
     return parse_local_state(
@@ -103,11 +117,13 @@ async def async_validate_legacy_device(
     *,
     resolve_timeout: float = 10.0,
     command_timeout: int = 30,
+    include_device_info: bool = True,
 ) -> CameraValidationResult:
     """Wake, authenticate, and immediately close without media operations."""
     lease = None
     host = None
     connection = None
+    failure_stage = "UID_RESOLVE_ERROR"
     resolve_started = time.monotonic()
     try:
         interface_name, _ = await asyncio.to_thread(
@@ -138,6 +154,7 @@ async def async_validate_legacy_device(
             uid=uid,
         )
         host.baichuan._connection = connection
+        failure_stage = "WAKE_ERROR"
         connect_started = time.monotonic()
         await connection.connect()
         connect_seconds = time.monotonic() - connect_started
@@ -146,20 +163,34 @@ async def async_validate_legacy_device(
         auth_started = time.monotonic()
         # Argus 2E omits analogChnNum; Phase 2 proved login with this metadata
         # parsing path disabled. No HTTP discovery is required.
+        failure_stage = "AUTH_ERROR"
         host.baichuan._first_login = False
         await host.baichuan.login()
         auth_seconds = time.monotonic() - auth_started
-        local_state = await async_collect_local_state(host)
+        local_state = await async_collect_local_state(
+            host, include_device_info=include_device_info
+        )
         return CameraValidationResult(
             "LAN", resolve_seconds, connect_seconds, auth_seconds, local_state
         )
+    except (ReolinkError, OSError, TimeoutError):
+        _LOGGER.warning("%s", failure_stage)
+        raise CameraStageError(failure_stage) from None
     finally:
         try:
             if host is not None:
-                await host.logout()
-            if connection is not None and connection.connection_open:
-                await connection.close()
-            if lease is not None:
-                lease.close()
+                try:
+                    await host.logout()
+                except (ReolinkError, OSError, TimeoutError):
+                    pass
         finally:
-            password = ""
+            try:
+                if connection is not None and connection.connection_open:
+                    try:
+                        await connection.close()
+                    except (ReolinkError, OSError, TimeoutError):
+                        pass
+            finally:
+                if lease is not None:
+                    lease.close()
+                password = ""

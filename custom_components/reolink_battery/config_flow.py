@@ -13,7 +13,7 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from reolink_aio.exceptions import CredentialsInvalidError, ReolinkConnectionError
 
-from .camera import async_validate_legacy_device
+from .camera import CameraStageError, async_validate_legacy_device
 from .cloud import (
     CloudDevice,
     CloudError,
@@ -186,6 +186,12 @@ class ReolinkBatteryConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_USERNAME],
                     user_input[CONF_PASSWORD],
                     ipaddress.ip_interface(user_input[CONF_INTERFACE]),
+                )
+            except CameraStageError as err:
+                errors["base"] = (
+                    "invalid_device_auth"
+                    if err.stage == "AUTH_ERROR"
+                    else "cannot_connect_device"
                 )
             except CredentialsInvalidError as err:
                 _LOGGER.debug("Local validation rejected credentials: %s", type(err).__name__)

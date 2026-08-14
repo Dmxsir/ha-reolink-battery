@@ -111,6 +111,9 @@ async def main() -> None:
                 const.CONF_UID: "synthetic-camera",
                 const.CONF_DEVICE_NAME: "Synthetic Argus",
                 const.CONF_MODEL: "Argus 2E",
+                const.CONF_DEVICE_USERNAME: "admin",
+                const.CONF_DEVICE_PASSWORD: "unused",
+                const.CONF_INTERFACE: "192.0.2.61/24",
                 const.CONF_LOCAL_STATE: status.local_state_as_dict(local),
             },
             options={},
@@ -123,6 +126,21 @@ async def main() -> None:
         # Register without ConfigEntries.async_add(), which would start unrelated
         # network/http dependencies in this deliberately minimal Core harness.
         hass.config_entries._entries[entry.entry_id] = entry
+        entity_registry = er.async_get(hass)
+        for key in integration.STORAGE_SENSOR_KEYS:
+            registry_entry = entity_registry.async_get_or_create(
+                "sensor",
+                const.DOMAIN,
+                f"synthetic-camera_{key}",
+                config_entry=entry,
+                suggested_object_id=f"synthetic_camera_{key}",
+                unit_of_measurement="B",
+            )
+            entity_registry.async_update_entity_options(
+                registry_entry.entity_id,
+                "sensor.private",
+                {"suggested_unit_of_measurement": "B"},
+            )
 
         async with entry.setup_lock:
             assert await integration.async_setup_entry(hass, entry)
@@ -131,12 +149,34 @@ async def main() -> None:
         entity_entries = er.async_entries_for_config_entry(
             er.async_get(hass), entry.entry_id
         )
-        assert len(entity_entries) == 7
+        assert len(entity_entries) == 8
         entities_by_unique_id = {item.unique_id: item for item in entity_entries}
         battery_entity = entities_by_unique_id["synthetic-camera_battery"]
         charging_entity = entities_by_unique_id["synthetic-camera_charging"]
+        storage_total_entity = entities_by_unique_id[
+            "synthetic-camera_storage_total"
+        ]
+        storage_used_entity = entities_by_unique_id[
+            "synthetic-camera_storage_used"
+        ]
+        storage_free_entity = entities_by_unique_id[
+            "synthetic-camera_storage_free"
+        ]
+        assert "synthetic-camera_refresh_device_status" in entities_by_unique_id
         assert hass.states.get(battery_entity.entity_id).state == "100"
         assert hass.states.get(charging_entity.entity_id).state == "on"
+        assert hass.states.get(storage_total_entity.entity_id).state == "14.857"
+        assert hass.states.get(storage_used_entity.entity_id).state == "14.311"
+        assert hass.states.get(storage_free_entity.entity_id).state == "0.546"
+        assert hass.states.get(storage_total_entity.entity_id).attributes[
+            "unit_of_measurement"
+        ] == "GB"
+        for key in integration.STORAGE_SENSOR_KEYS:
+            registry_entry = entity_registry.async_get(
+                entities_by_unique_id[f"synthetic-camera_{key}"].entity_id
+            )
+            assert registry_entry.unit_of_measurement == "GB"
+            assert "sensor.private" not in registry_entry.options
         device_entries = dr.async_entries_for_config_entry(
             dr.async_get(hass), entry.entry_id
         )
@@ -146,7 +186,7 @@ async def main() -> None:
         assert device.sw_version == "0616_722_52_478"
         assert device.hw_version == "BIPC_36S7616MC94"
         print("HA_CORE_LOAD_OK=1")
-        print("HA_CORE_ENTITY_COUNT=7")
+        print("HA_CORE_ENTITY_COUNT=8")
         print("HA_CORE_DEVICE_INFO_OK=1")
         print("HA_CORE_LOCAL_CAMERA_CONTACTED=0")
 

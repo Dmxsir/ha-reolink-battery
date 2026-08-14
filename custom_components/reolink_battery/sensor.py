@@ -31,15 +31,20 @@ if TYPE_CHECKING:
     from . import ReolinkBatteryConfigEntry
 
 
-def _storage_value(name: str) -> Callable[[LocalState], int | None]:
+DECIMAL_GIGABYTE = 1_000_000_000
+
+
+def _storage_value(name: str) -> Callable[[LocalState], float | None]:
     return lambda state: (
-        getattr(state.storage, name) if state.storage is not None else None
+        getattr(state.storage, name) / DECIMAL_GIGABYTE
+        if state.storage is not None and getattr(state.storage, name) is not None
+        else None
     )
 
 
 @dataclass(frozen=True, kw_only=True)
 class ReolinkStatusSensorDescription(SensorEntityDescription):
-    value: Callable[[LocalState], int | datetime | None]
+    value: Callable[[LocalState], float | int | datetime | None]
 
 
 SENSORS = (
@@ -58,7 +63,8 @@ SENSORS = (
         translation_key="storage_total",
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfInformation.BYTES,
+        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        suggested_display_precision=2,
         entity_category=EntityCategory.DIAGNOSTIC,
         value=_storage_value("total_bytes"),
     ),
@@ -67,7 +73,8 @@ SENSORS = (
         translation_key="storage_used",
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfInformation.BYTES,
+        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        suggested_display_precision=2,
         entity_category=EntityCategory.DIAGNOSTIC,
         value=_storage_value("used_bytes"),
     ),
@@ -76,7 +83,8 @@ SENSORS = (
         translation_key="storage_free",
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfInformation.BYTES,
+        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        suggested_display_precision=2,
         entity_category=EntityCategory.DIAGNOSTIC,
         value=_storage_value("free_bytes"),
     ),
@@ -129,7 +137,7 @@ class ReolinkStatusSensor(SensorEntity):
         )
 
     @property
-    def native_value(self) -> int | datetime | None:
+    def native_value(self) -> float | int | datetime | None:
         local = self._entry.runtime_data.status.state.local
         return None if local is None else self.entity_description.value(local)
 

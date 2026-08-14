@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import ipaddress
+from dataclasses import dataclass, field
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import Platform, UnitOfInformation
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .cloud import CloudTokens, ReolinkCloudClient
@@ -16,6 +19,9 @@ from .const import (
     CONF_ACCOUNT_EMAIL,
     CONF_ACCOUNT_PASSWORD,
     CONF_DEVICE_NAME,
+    CONF_DEVICE_PASSWORD,
+    CONF_DEVICE_USERNAME,
+    CONF_INTERFACE,
     CONF_LOCAL_STATE,
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
@@ -36,7 +42,16 @@ from .device_status import (
     local_state_from_dict,
 )
 
-PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR)
+PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON)
+STORAGE_SENSOR_KEYS = ("storage_total", "storage_used", "storage_free")
+
+
+class LocalStatusRefreshError(RuntimeError):
+    """A secret-safe manual refresh failure."""
+
+    def __init__(self, stage: str) -> None:
+        super().__init__(stage)
+        self.stage = stage
 
 
 @dataclass(slots=True)
@@ -46,6 +61,7 @@ class ReolinkBatteryRuntime:
     cloud: ReolinkCloudClient
     coordinator: ReolinkBatteryCoordinator
     status: DeviceStatusCache
+    local_operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 ReolinkBatteryConfigEntry = ConfigEntry[ReolinkBatteryRuntime]
@@ -95,12 +111,39 @@ async def async_setup_entry(
         )
     )
     entry.runtime_data = ReolinkBatteryRuntime(cloud, coordinator, status)
+    _migrate_storage_units(hass, entry)
     _update_device_registry(hass, entry, local_state)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_create_background_task(
         hass, coordinator.async_run(), "reolink_battery cloud event polling"
     )
     return True
+
+
+def _migrate_storage_units(
+    hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
+) -> None:
+    """Replace Alpha 3's automatically retained byte display with decimal GB."""
+    registry = er.async_get(hass)
+    for key in STORAGE_SENSOR_KEYS:
+        entity_id = registry.async_get_entity_id(
+            Platform.SENSOR, DOMAIN, f"{entry.data[CONF_UID]}_{key}"
+        )
+        if entity_id is None or (registry_entry := registry.async_get(entity_id)) is None:
+            continue
+        private_options = dict(registry_entry.options.get("sensor.private", {}))
+        if (
+            private_options.get("suggested_unit_of_measurement")
+            != UnitOfInformation.BYTES
+        ):
+            continue
+        private_options.pop("suggested_unit_of_measurement")
+        registry.async_update_entity(
+            entity_id, unit_of_measurement=UnitOfInformation.GIGABYTES
+        )
+        registry.async_update_entity_options(
+            entity_id, "sensor.private", private_options or None
+        )
 
 
 def _update_device_registry(
@@ -140,6 +183,39 @@ def update_local_state(
         data={**entry.data, CONF_LOCAL_STATE: local_state_as_dict(merged)},
     )
     _update_device_registry(hass, entry, merged)
+
+
+async def async_refresh_local_status(
+    hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
+) -> LocalState:
+    """Run one user-requested local status session and update its shared cache."""
+    async with entry.runtime_data.local_operation_lock:
+        # Keep protocol imports out of normal startup: loading the integration
+        # must not initialize or contact the sleeping camera.
+        from .camera import CameraStageError, async_validate_legacy_device
+
+        previous = entry.runtime_data.status.state.local
+        info = previous.device_info if previous is not None else None
+        include_device_info = (
+            info is None or not info.model or not info.firmware or not info.hardware
+        )
+        try:
+            result = await async_validate_legacy_device(
+                entry.data[CONF_UID],
+                entry.data[CONF_DEVICE_USERNAME],
+                entry.data[CONF_DEVICE_PASSWORD],
+                ipaddress.ip_interface(entry.data[CONF_INTERFACE]),
+                include_device_info=include_device_info,
+            )
+        except CameraStageError as err:
+            raise LocalStatusRefreshError(err.stage) from None
+        if result.local_state is None:
+            raise LocalStatusRefreshError("LOCAL_STATUS_QUERY_ERROR")
+
+        update_local_state(hass, entry, result.local_state)
+        merged = entry.runtime_data.status.state.local
+        assert merged is not None
+        return merged
 
 
 async def async_unload_entry(
