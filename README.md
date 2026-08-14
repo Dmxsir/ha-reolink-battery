@@ -20,10 +20,17 @@ Motion event
 
 This project is an **alpha** and is not production ready.
 
-Milestone 3A is in live validation: the integration loads, provides an
-account/device config flow, validates a short battery-safe local camera
-session, polls the cloud Message Center, decodes its STM v1 response,
-deduplicates normalized events, and persists them in a bounded pending queue.
+Milestone 3A is complete: the integration loads, provides an account/device
+config flow, validates a short battery-safe local camera session, polls the
+cloud Message Center, decodes its STM v1 response, deduplicates normalized
+events, and persists them in a bounded pending queue.
+
+Alpha 3 adds cache-backed entities for battery percentage, charging,
+storage total/used/free, Wi-Fi signal, and the last local refresh timestamp.
+Model, firmware, and hardware are shown on the Home Assistant device. These
+values are collected only during an already-required short local session; the
+entities never poll or wake the camera themselves. Until a local snapshot has
+been captured, they remain unavailable.
 
 Automatic motion-to-recording download and Telegram delivery are still under
 development. The pending queue currently has no camera worker, so a cloud event

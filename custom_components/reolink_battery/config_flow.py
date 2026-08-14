@@ -31,6 +31,7 @@ from .const import (
     CONF_DEVICE_PASSWORD,
     CONF_DEVICE_USERNAME,
     CONF_INTERFACE,
+    CONF_LOCAL_STATE,
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
     CONF_REFRESH_TOKEN,
@@ -40,6 +41,7 @@ from .const import (
     DEFAULT_DEVICE_USERNAME,
     DOMAIN,
 )
+from .device_status import local_state_as_dict
 from .lan import lan_network_choices
 
 _LOGGER = logging.getLogger(__name__)
@@ -179,7 +181,7 @@ class ReolinkBatteryConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             assert self._selected is not None
             try:
-                await async_validate_legacy_device(
+                validation = await async_validate_legacy_device(
                     self._selected.uid,
                     user_input[CONF_USERNAME],
                     user_input[CONF_PASSWORD],
@@ -196,24 +198,28 @@ class ReolinkBatteryConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 assert self._tokens is not None
+                local_state = getattr(validation, "local_state", None)
+                data = {
+                    CONF_ACCOUNT_EMAIL: self._email,
+                    CONF_ACCOUNT_PASSWORD: self._account_password,
+                    CONF_ACCESS_TOKEN: self._tokens.access_token,
+                    CONF_REFRESH_TOKEN: self._tokens.refresh_token,
+                    CONF_MFA_TRUST_TOKEN: self._tokens.mfa_trust_token,
+                    CONF_USER_ID: self._tokens.user_id,
+                    CONF_TOKEN_EXPIRES_AT: self._tokens.expires_at,
+                    CONF_UID: self._selected.uid,
+                    CONF_DEVICE_NAME: self._selected.title,
+                    CONF_MODEL: self._selected.model,
+                    CONF_AUTH_PATH: self._selected.auth_path,
+                    CONF_DEVICE_USERNAME: user_input[CONF_USERNAME],
+                    CONF_DEVICE_PASSWORD: user_input[CONF_PASSWORD],
+                    CONF_INTERFACE: user_input[CONF_INTERFACE],
+                }
+                if local_state is not None:
+                    data[CONF_LOCAL_STATE] = local_state_as_dict(local_state)
                 return self.async_create_entry(
                     title=self._selected.title or self._selected.model or "Argus 2E",
-                    data={
-                        CONF_ACCOUNT_EMAIL: self._email,
-                        CONF_ACCOUNT_PASSWORD: self._account_password,
-                        CONF_ACCESS_TOKEN: self._tokens.access_token,
-                        CONF_REFRESH_TOKEN: self._tokens.refresh_token,
-                        CONF_MFA_TRUST_TOKEN: self._tokens.mfa_trust_token,
-                        CONF_USER_ID: self._tokens.user_id,
-                        CONF_TOKEN_EXPIRES_AT: self._tokens.expires_at,
-                        CONF_UID: self._selected.uid,
-                        CONF_DEVICE_NAME: self._selected.title,
-                        CONF_MODEL: self._selected.model,
-                        CONF_AUTH_PATH: self._selected.auth_path,
-                        CONF_DEVICE_USERNAME: user_input[CONF_USERNAME],
-                        CONF_DEVICE_PASSWORD: user_input[CONF_PASSWORD],
-                        CONF_INTERFACE: user_input[CONF_INTERFACE],
-                    },
+                    data=data,
                 )
         return self.async_show_form(
             step_id="local",

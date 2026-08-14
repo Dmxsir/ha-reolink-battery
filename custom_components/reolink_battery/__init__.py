@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -15,6 +16,7 @@ from .const import (
     CONF_ACCOUNT_EMAIL,
     CONF_ACCOUNT_PASSWORD,
     CONF_DEVICE_NAME,
+    CONF_LOCAL_STATE,
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
     CONF_REFRESH_TOKEN,
@@ -25,6 +27,16 @@ from .const import (
     MANUFACTURER,
 )
 from .coordinator import ReolinkBatteryCoordinator
+from .device_status import (
+    CloudState,
+    DeviceState,
+    DeviceStatusCache,
+    LocalState,
+    local_state_as_dict,
+    local_state_from_dict,
+)
+
+PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR)
 
 
 @dataclass(slots=True)
@@ -33,6 +45,7 @@ class ReolinkBatteryRuntime:
 
     cloud: ReolinkCloudClient
     coordinator: ReolinkBatteryCoordinator
+    status: DeviceStatusCache
 
 
 ReolinkBatteryConfigEntry = ConfigEntry[ReolinkBatteryRuntime]
@@ -74,23 +87,66 @@ async def async_setup_entry(
         update_tokens,
     )
     await coordinator.async_initialize()
-    entry.runtime_data = ReolinkBatteryRuntime(cloud, coordinator)
-    dr.async_get(hass).async_get_or_create(
-        config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, entry.data[CONF_UID])},
-        manufacturer=MANUFACTURER,
-        name=entry.data.get(CONF_DEVICE_NAME) or "Reolink battery camera",
-        model=entry.data.get(CONF_MODEL) or None,
+    local_state = local_state_from_dict(entry.data.get(CONF_LOCAL_STATE))
+    status = DeviceStatusCache(
+        DeviceState(
+            CloudState(model=entry.data.get(CONF_MODEL) or None),
+            local_state,
+        )
     )
+    entry.runtime_data = ReolinkBatteryRuntime(cloud, coordinator, status)
+    _update_device_registry(hass, entry, local_state)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_create_background_task(
         hass, coordinator.async_run(), "reolink_battery cloud event polling"
     )
     return True
 
 
+def _update_device_registry(
+    hass: HomeAssistant,
+    entry: ReolinkBatteryConfigEntry,
+    local_state: LocalState | None,
+) -> None:
+    """Create/enrich DeviceInfo without replacing known values with nulls."""
+    info = local_state.device_info if local_state is not None else None
+    values = {
+        "config_entry_id": entry.entry_id,
+        "identifiers": {(DOMAIN, entry.data[CONF_UID])},
+        "manufacturer": MANUFACTURER,
+        "name": entry.data.get(CONF_DEVICE_NAME) or "Reolink battery camera",
+    }
+    model = info.model if info and info.model else entry.data.get(CONF_MODEL)
+    if model:
+        values["model"] = model
+    if info and info.firmware:
+        values["sw_version"] = info.firmware
+    if info and info.hardware:
+        values["hw_version"] = info.hardware
+    dr.async_get(hass).async_get_or_create(**values)
+
+
+def update_local_state(
+    hass: HomeAssistant,
+    entry: ReolinkBatteryConfigEntry,
+    local_state: LocalState,
+) -> None:
+    """Cache/persist a snapshot produced by an already-open camera session."""
+    entry.runtime_data.status.update_local(local_state)
+    merged = entry.runtime_data.status.state.local
+    assert merged is not None
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, CONF_LOCAL_STATE: local_state_as_dict(merged)},
+    )
+    _update_device_registry(hass, entry, merged)
+
+
 async def async_unload_entry(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> bool:
     """Persist the queue and stop polling."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     await entry.runtime_data.coordinator.async_shutdown()
     return True

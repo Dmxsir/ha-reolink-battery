@@ -47,5 +47,18 @@
       "no_lan_interface": "No suitable private IPv4 LAN interface is enabled in Home Assistant.",
       "unsupported_auth_path": "This milestone supports the verified legacy local-credential path only."
     }
+  },
+  "entity": {
+    "sensor": {
+      "battery": {"name": "Battery"},
+      "storage_total": {"name": "Storage total"},
+      "storage_used": {"name": "Storage used"},
+      "storage_free": {"name": "Storage free"},
+      "wifi_signal": {"name": "Wi-Fi signal"},
+      "last_local_refresh": {"name": "Last local refresh"}
+    },
+    "binary_sensor": {
+      "charging": {"name": "Charging"}
+    }
   }
 }

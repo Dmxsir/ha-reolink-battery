@@ -19,6 +19,7 @@ CONF_AUTH_PATH = "auth_path"
 CONF_DEVICE_USERNAME = "device_username"
 CONF_DEVICE_PASSWORD = "device_password"
 CONF_INTERFACE = "interface"
+CONF_LOCAL_STATE = "local_state"
 
 AUTH_PATH_LEGACY = "legacy_local_credential"
 
