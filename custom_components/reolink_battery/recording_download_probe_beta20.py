@@ -30,6 +30,7 @@ from .recording_probe import RecordingCandidate
 
 CONTENT_LAYOUT = "cmd13_prepare_cmd8_p2p_heartbeat_full_transfer_shape"
 P2P_HEARTBEAT_INTERVAL = 1.0
+PERIODIC_RX_ACK_INTERVAL = 0.010
 RELIABLE_UDP_ACK_TIMEOUT = 0.5
 RELIABLE_UDP_MAX_RETRANSMITS = 2
 STREAM_IDLE_TIMEOUT = 30.0
@@ -80,6 +81,10 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     udp_highest_buffered_seq_at_disconnect: int | None = None
     udp_expected_next_seq_at_disconnect: int | None = None
     udp_max_gap_recovery_ms: float | None = None
+    udp_periodic_ack_started: bool = False
+    udp_periodic_ack_interval_ms: float = 0.0
+    udp_periodic_ack_count: int = 0
+    udp_periodic_ack_gap_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +206,10 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         self.udp_highest_buffered_seq_at_disconnect: int | None = None
         self.udp_expected_next_seq_at_disconnect: int | None = None
         self.udp_max_gap_recovery_ms: float | None = None
+        self.udp_periodic_ack_started = False
+        self.udp_periodic_ack_interval_ms = 0.0
+        self.udp_periodic_ack_count = 0
+        self.udp_periodic_ack_gap_count = 0
         self._missing_seq_ids_seen: set[int] = set()
         self._recovered_missing_seq_ids: set[int] = set()
         self._missing_seq_first_seen_at: dict[int, float] = {}
@@ -332,6 +341,25 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
             if gap_bitmap:
                 self.udp_ack_with_gap_bitmap_count += 1
 
+    def send_periodic_ack(self) -> bool:
+        """Repeat the existing reolink-aio ACK state without changing its wire format."""
+        will_send = (
+            self._transport is not None
+            and self.host_id is not None
+            and self._recv_seq_id >= 0
+        )
+        if not will_send:
+            return False
+        gap_active = bool(self._seq_data)
+        before = self.udp_ack_sent_count
+        self.send_ack()
+        if self.udp_ack_sent_count <= before:
+            return False
+        self.udp_periodic_ack_count += 1
+        if gap_active:
+            self.udp_periodic_ack_gap_count += 1
+        return True
+
     def parse_udp_connection(self, port: int) -> None:
         if _packet_is_remote_disconnect(self._udp_data):
             self.remote_disconnect_observed = True
@@ -366,6 +394,7 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         self._p2p_heartbeat_first_sent_at: float | None = None
         self._p2p_heartbeat_total_count = 0
         self._p2p_heartbeat_started_after_handoff = False
+        self._periodic_rx_ack_task: asyncio.Task[None] | None = None
         self._reliable_ack_waiters: dict[int, asyncio.Future[bool]] = {}
         self._reliable_sent_at: dict[int, float] = {}
         self._reliable_ack_delays_ms: dict[int, float] = {}
@@ -552,6 +581,14 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
                 snapshot_protocol.udp_expected_next_seq_at_disconnect
             )
             trace.udp_max_gap_recovery_ms = snapshot_protocol.udp_max_gap_recovery_ms
+            trace.udp_periodic_ack_started = snapshot_protocol.udp_periodic_ack_started
+            trace.udp_periodic_ack_interval_ms = (
+                snapshot_protocol.udp_periodic_ack_interval_ms
+            )
+            trace.udp_periodic_ack_count = snapshot_protocol.udp_periodic_ack_count
+            trace.udp_periodic_ack_gap_count = (
+                snapshot_protocol.udp_periodic_ack_gap_count
+            )
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:
         packet, transaction_id = super()._construct_udp_mess(body)
@@ -675,13 +712,60 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         except asyncio.CancelledError:
             pass
 
+    async def _periodic_rx_ack_loop(self) -> None:
+        """Repeat the current receive ACK state at the official-client cadence."""
+        try:
+            while self.connection_open:
+                await asyncio.sleep(PERIODIC_RX_ACK_INTERVAL)
+                if not self.connection_open:
+                    break
+                protocol = self._protocol
+                if not isinstance(protocol, _P2PHeartbeatProbeProtocol):
+                    break
+                try:
+                    protocol.send_periodic_ack()
+                except (OSError, RuntimeError):
+                    break
+        except asyncio.CancelledError:
+            raise
+
+    def _start_periodic_rx_ack_loop(self) -> None:
+        """Start exactly one 10 ms receive-ACK repeater for the active UDP session."""
+        task = self._periodic_rx_ack_task
+        if task is not None and not task.done():
+            return
+        protocol = self._protocol
+        if not isinstance(protocol, _P2PHeartbeatProbeProtocol):
+            return
+        protocol.udp_periodic_ack_started = True
+        protocol.udp_periodic_ack_interval_ms = round(
+            PERIODIC_RX_ACK_INTERVAL * 1000.0, 3
+        )
+        protocol.send_periodic_ack()
+        self._periodic_rx_ack_task = self._loop.create_task(
+            self._periodic_rx_ack_loop()
+        )
+
+    async def _stop_periodic_rx_ack_loop(self) -> None:
+        task = self._periodic_rx_ack_task
+        self._periodic_rx_ack_task = None
+        if task is None or task is asyncio.current_task():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     async def connect(self):
-        """Open/adopt the session and start heartbeat before login/FileInfo."""
+        """Open/adopt the session and start heartbeat plus periodic RX ACK."""
         await super().connect()
         self._start_p2p_heartbeat_loop()
+        self._start_periodic_rx_ack_loop()
 
     async def close(self) -> None:
-        """Stop the sole heartbeat sender before closing the adopted session."""
+        """Stop background ACK/heartbeat senders before closing the session."""
+        await self._stop_periodic_rx_ack_loop()
         await self._stop_p2p_heartbeat_loop()
         await super().close()
 

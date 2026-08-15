@@ -331,6 +331,14 @@ async def async_get_config_entry_diagnostics(
                     stream.udp_expected_next_seq_at_disconnect
                 ),
                 "udp_max_gap_recovery_ms": stream.udp_max_gap_recovery_ms,
+                "udp_periodic_ack_started": stream.udp_periodic_ack_started,
+                "udp_periodic_ack_interval_ms": (
+                    stream.udp_periodic_ack_interval_ms
+                ),
+                "udp_periodic_ack_count": stream.udp_periodic_ack_count,
+                "udp_periodic_ack_gap_count": (
+                    stream.udp_periodic_ack_gap_count
+                ),
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -404,7 +412,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.9-gap-recovery-telemetry",
+        "milestone": "3B.10-periodic-rx-ack",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }
