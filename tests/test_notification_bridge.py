@@ -86,7 +86,11 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(self.parse(attrs))
 
     def test_big_text_fallback(self):
-        attrs = {**REAL_NOTIFICATION, "android.text": "", "android.bigText": "An alarm from atv."}
+        attrs = {
+            **REAL_NOTIFICATION,
+            "android.text": "",
+            "android.bigText": "An alarm from atv.",
+        }
         self.assertIsNotNone(self.parse(attrs))
 
     def test_missing_channel_is_allowed_for_known_template(self):
@@ -169,6 +173,9 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(listener.last_event_queued)
         self.assertFalse(listener.last_duplicate_rejected)
         self.assertFalse(await listener.async_process_attributes(REAL_NOTIFICATION))
+        self.assertTrue(listener.last_event_matched)
+        self.assertTrue(listener.last_camera_mapped)
+        self.assertFalse(listener.last_event_queued)
         self.assertTrue(listener.last_duplicate_rejected)
         self.assertEqual(len(queue.pending), 1)
 
@@ -185,6 +192,58 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         attrs = {**REAL_NOTIFICATION, "package": "other.app"}
         self.assertFalse(await listener.async_process_attributes(attrs))
         self.assertEqual(calls, [])
+
+    async def test_unrelated_notification_does_not_erase_last_reolink_telemetry(self):
+        queue = events.EventQueue()
+
+        async def ingest(event):
+            return 1 if queue.enqueue(event) else 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(), "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        self.assertTrue(await listener.async_process_attributes(REAL_NOTIFICATION))
+        saved_time = listener.last_reolink_notification_time
+        self.assertFalse(
+            await listener.async_process_attributes(
+                {
+                    "package": "com.example.other",
+                    "android.title": "Other",
+                    "android.text": "Not Reolink",
+                    "post_time": 1786709130000,
+                }
+            )
+        )
+        self.assertTrue(listener.last_event_matched)
+        self.assertTrue(listener.last_camera_mapped)
+        self.assertTrue(listener.last_event_queued)
+        self.assertFalse(listener.last_duplicate_rejected)
+        self.assertEqual(listener.last_reolink_notification_time, saved_time)
+        self.assertEqual(listener.last_reolink_notification_camera, "atv")
+
+    async def test_pending_android_event_restores_runtime_telemetry_after_reload(self):
+        event = bridge.notification_event_from_attributes(
+            REAL_NOTIFICATION, expected_device_name="atv", uid="camera-1"
+        )
+        assert event is not None
+
+        async def ingest(_event):
+            return 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(),
+            "sensor.phone_last_notification",
+            "atv",
+            "camera-1",
+            ingest,
+            initial_event=event,
+        )
+        self.assertTrue(listener.last_event_matched)
+        self.assertTrue(listener.last_camera_mapped)
+        self.assertTrue(listener.last_event_queued)
+        self.assertFalse(listener.last_duplicate_rejected)
+        self.assertEqual(listener.last_reolink_notification_time, event.notification_post_time)
+        self.assertEqual(listener.last_reolink_notification_camera, "atv")
 
 
 if __name__ == "__main__":
