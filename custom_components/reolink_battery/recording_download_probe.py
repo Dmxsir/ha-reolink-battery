@@ -467,6 +467,11 @@ async def async_prepare_download_for_event(
         failure_stage = "AUTH_ERROR"
         host.baichuan._first_login = False
         await host.baichuan.login()
+        activate_fresh_heartbeat = getattr(
+            connection, "activate_fresh_heartbeat_tids_after_login", None
+        )
+        if callable(activate_fresh_heartbeat):
+            activate_fresh_heartbeat()
 
         event_time = event.notification_post_time or event.alarm_time
         target_local = event_time.astimezone(ZoneInfo(time_zone)).replace(tzinfo=None)

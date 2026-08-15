@@ -264,6 +264,12 @@ async def async_get_config_entry_diagnostics(
                 "p2p_heartbeat_unique_tid_count": (
                     stream.p2p_heartbeat_unique_tid_count
                 ),
+                "p2p_heartbeat_fresh_tid_activated_after_login": (
+                    stream.p2p_heartbeat_fresh_tid_activated_after_login
+                ),
+                "p2p_heartbeat_pre_auth_reused_tid_count": (
+                    stream.p2p_heartbeat_pre_auth_reused_tid_count
+                ),
                 "proactive_cmd234_count": stream.proactive_cmd234_count,
                 "cmd8_full_high": stream.cmd8_full_high,
                 "cmd8_handle_used": stream.cmd8_handle_used,
@@ -433,7 +439,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.13-fresh-p2p-heartbeat-tid",
+        "milestone": "3B.14-post-auth-fresh-heartbeat-tid",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

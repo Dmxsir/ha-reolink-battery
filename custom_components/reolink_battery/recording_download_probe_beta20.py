@@ -52,6 +52,8 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     p2p_heartbeat_background_task_active: bool = False
     p2p_heartbeat_fresh_tid_enabled: bool = False
     p2p_heartbeat_unique_tid_count: int = 0
+    p2p_heartbeat_fresh_tid_activated_after_login: bool = False
+    p2p_heartbeat_pre_auth_reused_tid_count: int = 0
     proactive_cmd234_count: int = 0
     remote_disconnect_observed: bool = False
     connection_lost_exception_present: bool = False
@@ -438,7 +440,11 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         self._p2p_heartbeat_first_sent_at: float | None = None
         self._p2p_heartbeat_total_count = 0
         self._p2p_heartbeat_started_after_handoff = False
-        self._p2p_heartbeat_fresh_tid_enabled = True
+        # Preserve beta.38 heartbeat identity during wake/auth. Fresh IDs
+        # are enabled explicitly only after Baichuan login succeeds.
+        self._p2p_heartbeat_fresh_tid_enabled = False
+        self._p2p_heartbeat_fresh_tid_activated_after_login = False
+        self._p2p_heartbeat_pre_auth_reused_tid_count = 0
         self._p2p_heartbeat_tids: set[int] = set()
         self._periodic_rx_ack_task: asyncio.Task[None] | None = None
         self._reliable_ack_waiters: dict[int, asyncio.Future[bool]] = {}
@@ -684,16 +690,23 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             or protocol.host_id is None
         ):
             return False
-        # Use a fresh discovery transaction ID for every C2D_HB instead of
-        # replaying the original C2D_C transaction ID for the whole session.
-        transaction_id = secrets.randbelow(999_000) + 1_000
-        while (
-            transaction_id == self._p2p_heartbeat_tid
-            or transaction_id in self._p2p_heartbeat_tids
-        ):
+        if self._p2p_heartbeat_fresh_tid_enabled:
             transaction_id = secrets.randbelow(999_000) + 1_000
-        self._p2p_heartbeat_tid = transaction_id
-        self._p2p_heartbeat_tids.add(transaction_id)
+            while (
+                transaction_id == self._p2p_heartbeat_tid
+                or transaction_id in self._p2p_heartbeat_tids
+            ):
+                transaction_id = secrets.randbelow(999_000) + 1_000
+            self._p2p_heartbeat_tid = transaction_id
+            self._p2p_heartbeat_tids.add(transaction_id)
+        else:
+            # During wake/login keep the exact beta.38 identity behavior. This
+            # isolates post-auth lease lifetime from pre-auth compatibility.
+            transaction_id = self._p2p_heartbeat_tid
+            if transaction_id is None:
+                transaction_id = secrets.randbelow(999_000) + 1_000
+                self._p2p_heartbeat_tid = transaction_id
+            self._p2p_heartbeat_pre_auth_reused_tid_count += 1
         packet = _encode_p2p_heartbeat(
             transaction_id,
             protocol.client_id,
@@ -701,6 +714,11 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         )
         transport.sendto(packet, (self._host, self._port))
         return True
+
+    def activate_fresh_heartbeat_tids_after_login(self) -> None:
+        """Switch heartbeat identity only after authentication succeeds."""
+        self._p2p_heartbeat_fresh_tid_enabled = True
+        self._p2p_heartbeat_fresh_tid_activated_after_login = True
 
     def _record_p2p_heartbeat(self) -> bool:
         """Send one heartbeat and update connection-lifetime counters."""
@@ -740,6 +758,12 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         )
         trace.p2p_heartbeat_unique_tid_count = len(
             getattr(self, "_p2p_heartbeat_tids", set())
+        )
+        trace.p2p_heartbeat_fresh_tid_activated_after_login = bool(
+            getattr(self, "_p2p_heartbeat_fresh_tid_activated_after_login", False)
+        )
+        trace.p2p_heartbeat_pre_auth_reused_tid_count = int(
+            getattr(self, "_p2p_heartbeat_pre_auth_reused_tid_count", 0)
         )
         if snapshot_pre_cmd13:
             trace.p2p_heartbeat_pre_cmd13_count = self._p2p_heartbeat_total_count
