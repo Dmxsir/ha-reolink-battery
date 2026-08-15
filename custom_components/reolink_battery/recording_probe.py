@@ -34,23 +34,37 @@ TYPICAL_FILE_INFO_PAGE_SIZE = 40
 
 @dataclass(frozen=True, slots=True)
 class RecordingMetadata:
-    """One SD recording returned by FileInfoList."""
+    """One SD recording returned by FileInfoList, preserving download identity."""
 
     file_name: str
     start_time: datetime
     end_time: datetime
     size: int
+    record_id: str = ""
+    xml_file_name: str = ""
+    display_name: str = ""
+    channel_id: int | None = None
+    stream_type: str = ""
+    file_type: str = ""
+    record_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class RecordingCandidate:
-    """Secret-safe metadata for the best SD recording near one notification."""
+    """Selected SD recording plus exact FileInfo identity fields."""
 
     file_name: str
     start_time: datetime
     end_time: datetime
     size: int
     distance_seconds: float
+    record_id: str = ""
+    xml_file_name: str = ""
+    display_name: str = ""
+    channel_id: int | None = None
+    stream_type: str = ""
+    file_type: str = ""
+    record_type: str = ""
 
 
 @dataclass(slots=True)
@@ -154,7 +168,20 @@ def select_recording_candidate(
         if end.tzinfo is not None:
             end = end.replace(tzinfo=None)
         distance = _interval_distance(target_local, start, end)
-        candidate = RecordingCandidate(name, start, end, int(size), distance)
+        candidate = RecordingCandidate(
+            file_name=name,
+            start_time=start,
+            end_time=end,
+            size=int(size),
+            distance_seconds=distance,
+            record_id=str(getattr(vod, "record_id", "") or ""),
+            xml_file_name=str(getattr(vod, "xml_file_name", "") or ""),
+            display_name=str(getattr(vod, "display_name", "") or ""),
+            channel_id=getattr(vod, "channel_id", None),
+            stream_type=str(getattr(vod, "stream_type", "") or ""),
+            file_type=str(getattr(vod, "file_type", "") or ""),
+            record_type=str(getattr(vod, "record_type", "") or ""),
+        )
         unique[(name, start, end)] = candidate
 
     ranked = sorted(
@@ -201,14 +228,25 @@ def _xml_time(node: XML.Element, tag: str) -> datetime | None:
 
 
 def _metadata_from_file_info(node: XML.Element) -> RecordingMetadata | None:
-    name = _text(node, "Id", "ID", "id", "name", "fileName")
-    if not name:
+    # Keep these fields distinct. The official SDK download API consumes recording
+    # identity and filename separately, so collapsing them can produce a validly
+    # framed cmd13 request that the camera rejects as a bad file selection.
+    record_id = _text(node, "Id", "ID", "id") or ""
+    xml_file_name = _text(node, "fileName") or ""
+    display_name = _text(node, "name") or ""
+    chosen = record_id or xml_file_name or display_name
+    if not chosen:
         return None
 
     start = _xml_time(node, "startTime")
     end = _xml_time(node, "endTime")
     if start is None or end is None:
-        parsed = parse_file_name(name)
+        parsed = None
+        for candidate_name in (display_name, xml_file_name, record_id, chosen):
+            if candidate_name:
+                parsed = parse_file_name(candidate_name)
+                if parsed is not None:
+                    break
         if parsed is not None:
             start = datetime.combine(parsed.date, parsed.start)
             end = datetime.combine(parsed.date, parsed.end)
@@ -222,7 +260,26 @@ def _metadata_from_file_info(node: XML.Element) -> RecordingMetadata | None:
         size = int(size_text) if size_text else 0
     except ValueError:
         size = 0
-    return RecordingMetadata(name, start, end, size)
+
+    channel_text = _text(node, "channelId")
+    try:
+        channel_id = int(channel_text) if channel_text is not None else None
+    except ValueError:
+        channel_id = None
+
+    return RecordingMetadata(
+        file_name=chosen,
+        start_time=start,
+        end_time=end,
+        size=size,
+        record_id=record_id,
+        xml_file_name=xml_file_name,
+        display_name=display_name,
+        channel_id=channel_id,
+        stream_type=_text(node, "streamType") or "",
+        file_type=_text(node, "fileType") or "",
+        record_type=_text(node, "recordType", "type", "alarmType") or "",
+    )
 
 
 def _parse_file_info_page(xml_text: str) -> tuple[list[RecordingMetadata], bool | None]:
