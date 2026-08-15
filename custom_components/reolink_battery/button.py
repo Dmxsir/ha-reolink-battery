@@ -154,7 +154,7 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Validate cmd13 selection for the pending recording without media transfer."""
+    """Probe native cmd13 framing for the pending recording without cmd8."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -178,7 +178,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Find the queued recording, issue cmd13 only, then close the camera."""
+        """Find the queued recording, issue one native cmd13 frame, then close."""
         event = next(
             (
                 item
@@ -198,12 +198,23 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.candidate_end = None
         state.candidate_distance_seconds = None
         state.response_present = False
-        state.handle_present = False
-        state.expected_size = None
-        state.response_file_name_present = False
+        state.response_accepted = False
         state.failure_stage = ""
         state.failure_type = ""
         state.response_code = None
+        state.request_channel_id = None
+        state.request_stream_type = None
+        state.request_msg_num = None
+        state.request_message_class = None
+        state.request_body_length = None
+        state.request_payload_offset = None
+        state.response_message_class = None
+        state.response_channel_id = None
+        state.response_stream_type = None
+        state.response_msg_num = None
+        state.response_body_length = None
+        state.response_payload_offset = None
+        state.first_payload_length = 0
 
         try:
             async with self._entry.runtime_data.local_operation_lock:
@@ -222,11 +233,29 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
             state.response_code = response_code if isinstance(response_code, int) else None
             raise HomeAssistantError(err.stage) from None
 
-        state.success = True
         state.candidate_start = result.candidate_start
         state.candidate_end = result.candidate_end
         state.candidate_distance_seconds = result.candidate_distance_seconds
-        state.response_present = result.response_present
-        state.handle_present = result.handle_present
-        state.expected_size = result.expected_size
-        state.response_file_name_present = result.response_file_name_present
+        state.response_present = True
+        state.response_accepted = result.response_accepted
+        state.response_code = result.response.response_code
+        state.request_channel_id = result.request.channel_id
+        state.request_stream_type = result.request.stream_type
+        state.request_msg_num = result.request.msg_num
+        state.request_message_class = result.request.message_class
+        state.request_body_length = result.request.body_length
+        state.request_payload_offset = result.request.payload_offset
+        state.response_message_class = result.response.message_class
+        state.response_channel_id = result.response.channel_id
+        state.response_stream_type = result.response.stream_type
+        state.response_msg_num = result.response.msg_num
+        state.response_body_length = result.response.body_length
+        state.response_payload_offset = result.response.payload_offset
+        state.first_payload_length = result.response.payload_length
+        state.success = result.response_accepted
+
+        if not result.response_accepted:
+            state.failure_stage = (
+                f"DOWNLOAD_PREPARE_RESPONSE_{result.response.response_code}"
+            )
+            raise HomeAssistantError(state.failure_stage)
