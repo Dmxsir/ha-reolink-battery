@@ -1,0 +1,200 @@
+name: Publish beta24 Telegram delivery
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta24-telegram.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Wire Telegram option
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          const = Path('custom_components/reolink_battery/const.py')
+          text = const.read_text()
+          needle = 'CONF_NOTIFICATION_ENTITY = "notification_entity"\n'
+          addition = needle + 'CONF_TELEGRAM_NOTIFY_ENTITY = "telegram_notify_entity"\n'
+          if 'CONF_TELEGRAM_NOTIFY_ENTITY' not in text:
+              text = text.replace(needle, addition, 1)
+          const.write_text(text)
+
+          flow = Path('custom_components/reolink_battery/config_flow.py')
+          text = flow.read_text()
+          text = text.replace(
+              '    CONF_NOTIFICATION_ENTITY,\n',
+              '    CONF_NOTIFICATION_ENTITY,\n    CONF_TELEGRAM_NOTIFY_ENTITY,\n',
+              1,
+          )
+          old = '''_NOTIFICATION_OPTIONS_SCHEMA = vol.Schema(\n    {\n        vol.Optional(CONF_NOTIFICATION_ENTITY): EntitySelector(\n            EntitySelectorConfig(domain="sensor")\n        )\n    }\n)\n'''
+          new = '''_NOTIFICATION_OPTIONS_SCHEMA = vol.Schema(\n    {\n        vol.Optional(CONF_NOTIFICATION_ENTITY): EntitySelector(\n            EntitySelectorConfig(domain="sensor")\n        ),\n        vol.Optional(CONF_TELEGRAM_NOTIFY_ENTITY): EntitySelector(\n            EntitySelectorConfig(domain="notify")\n        ),\n    }\n)\n'''
+          if old not in text:
+              raise SystemExit('options schema insertion point not found')
+          flow.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Wire Telegram delivery into verified worker
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('custom_components/reolink_battery/recording_worker.py')
+          text = p.read_text()
+          text = text.replace(
+              '    CONF_INTERFACE,\n    CONF_UID,\n',
+              '    CONF_INTERFACE,\n    CONF_TELEGRAM_NOTIFY_ENTITY,\n    CONF_UID,\n',
+              1,
+          )
+          needle = '''    waiting_camera_closed: bool = False\n'''
+          addition = '''    waiting_camera_closed: bool = False\n    telegram_configured: bool = False\n    telegram_send_attempted: bool = False\n    telegram_send_succeeded: bool = False\n    telegram_path_allowed: bool | None = None\n    telegram_service_available: bool | None = None\n    telegram_last_failure_stage: str = ""\n    telegram_last_failure_type: str = ""\n    telegram_last_send_time: datetime | None = None\n'''
+          if needle not in text:
+              raise SystemExit('worker state insertion point not found')
+          text = text.replace(needle, addition, 1)
+
+          marker = '''    async def _process_once(self, event: CloudEvent) -> bool:\n'''
+          helper = '''    async def _async_send_telegram(self, final_path: Path, event: CloudEvent) -> None:\n        """Send one already-verified MP4 through Home Assistant Telegram Bot."""\n        entity_id = self._entry.options.get(CONF_TELEGRAM_NOTIFY_ENTITY)\n        state = self.state\n        state.telegram_configured = isinstance(entity_id, str) and bool(entity_id)\n        state.telegram_send_attempted = False\n        state.telegram_send_succeeded = False\n        state.telegram_path_allowed = None\n        state.telegram_service_available = None\n        state.telegram_last_failure_stage = ""\n        state.telegram_last_failure_type = ""\n        if not state.telegram_configured:\n            return\n\n        state.telegram_send_attempted = True\n        path = str(final_path)\n        state.telegram_path_allowed = self._hass.config.is_allowed_path(path)\n        if not state.telegram_path_allowed:\n            state.telegram_last_failure_stage = "TELEGRAM_FILE_PATH_NOT_ALLOWED"\n            return\n\n        state.telegram_service_available = self._hass.services.has_service(\n            "telegram_bot", "send_video"\n        )\n        if not state.telegram_service_available:\n            state.telegram_last_failure_stage = "TELEGRAM_SERVICE_UNAVAILABLE"\n            return\n\n        camera_name = event.device_name or self._entry.title\n        try:\n            await self._hass.services.async_call(\n                "telegram_bot",\n                "send_video",\n                {\n                    "entity_id": entity_id,\n                    "file": path,\n                    "caption": f"🎥 תנועה זוהתה במצלמה {camera_name}",\n                    "parse_mode": "plain_text",\n                },\n                blocking=True,\n            )\n        except Exception as err:  # noqa: BLE001 - delivery must not invalidate recording.\n            state.telegram_last_failure_stage = "TELEGRAM_SEND_ERROR"\n            state.telegram_last_failure_type = type(err).__name__\n            return\n        state.telegram_send_succeeded = True\n        state.telegram_last_send_time = datetime.now(UTC)\n\n'''
+          if marker not in text:
+              raise SystemExit('worker helper insertion point not found')
+          text = text.replace(marker, helper + marker, 1)
+
+          old = '''        self.state.last_ready_event_fired = True\n        return True\n'''
+          new = '''        self.state.last_ready_event_fired = True\n        await self._async_send_telegram(final_path, event)\n        return True\n'''
+          if old not in text:
+              raise SystemExit('worker completion insertion point not found')
+          p.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Wire Telegram diagnostics and translations
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          diag = Path('custom_components/reolink_battery/diagnostics.py')
+          text = diag.read_text()
+          needle = '''            "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),\n            "raw_path_exposed": False,\n'''
+          repl = '''            "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),\n            "telegram_configured": bool(worker and worker.state.telegram_configured),\n            "telegram_send_attempted": bool(worker and worker.state.telegram_send_attempted),\n            "telegram_send_succeeded": bool(worker and worker.state.telegram_send_succeeded),\n            "telegram_path_allowed": worker.state.telegram_path_allowed if worker else None,\n            "telegram_service_available": worker.state.telegram_service_available if worker else None,\n            "telegram_last_failure_stage": (worker.state.telegram_last_failure_stage or None) if worker else None,\n            "telegram_last_failure_type": (worker.state.telegram_last_failure_type or None) if worker else None,\n            "telegram_last_send_time": (\n                worker.state.telegram_last_send_time.isoformat()\n                if worker and worker.state.telegram_last_send_time else None\n            ),\n            "raw_path_exposed": False,\n'''
+          if needle not in text:
+              raise SystemExit('diagnostics insertion point not found')
+          text = text.replace(needle, repl, 1)
+          text = text.replace(
+              '"milestone": "3B.3-automatic-verified-recording-worker"',
+              '"milestone": "3B.4-telegram-delivery"',
+          )
+          diag.write_text(text)
+
+          for lang in ('en', 'he'):
+              p = Path(f'custom_components/reolink_battery/translations/{lang}.json')
+              data = json.loads(p.read_text())
+              step = data['options']['step']['init']
+              step['data']['telegram_notify_entity'] = (
+                  'Telegram destination' if lang == 'en' else 'יעד Telegram'
+              )
+              step.setdefault('data_description', {})['telegram_notify_entity'] = (
+                  'Optional Telegram Bot notify entity. A verified MP4 is sent only after it is safely saved.'
+                  if lang == 'en'
+                  else 'אופציונלי: ישות Notify של Telegram Bot. הווידאו יישלח רק לאחר שה-MP4 נשמר ואומת.'
+              )
+              if lang == 'en':
+                  step['title'] = 'Motion bridge and Telegram delivery'
+              else:
+                  step['title'] = 'גשר התראות ושליחה ל-Telegram'
+              p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+          PY
+
+      - name: Bump manifest
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('custom_components/reolink_battery/manifest.json')
+          data = json.loads(p.read_text())
+          data['version'] = '0.1.2-beta.24'
+          p.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+      - name: Install protocol dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe tests.test_recording_download_beta12
+
+      - name: Validate JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path('custom_components/reolink_battery').rglob('*.json'):
+              json.loads(path.read_text())
+          PY
+
+      - name: Static Telegram invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          worker = Path('custom_components/reolink_battery/recording_worker.py').read_text()
+          flow = Path('custom_components/reolink_battery/config_flow.py').read_text()
+          diag = Path('custom_components/reolink_battery/diagnostics.py').read_text()
+          required_worker = [
+              'self._hass.config.is_allowed_path(path)',
+              '"telegram_bot",\n                "send_video"',
+              '"file": path',
+              '"parse_mode": "plain_text"',
+              'await self._async_send_telegram(final_path, event)',
+          ]
+          missing = [x for x in required_worker if x not in worker]
+          if missing:
+              raise SystemExit(f'missing Telegram worker invariants: {missing}')
+          if 'CONF_TELEGRAM_NOTIFY_ENTITY' not in flow:
+              raise SystemExit('Telegram option missing')
+          if 'telegram_send_succeeded' not in diag:
+              raise SystemExit('Telegram diagnostics missing')
+          PY
+
+      - name: Commit beta24 wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/const.py \
+                  custom_components/reolink_battery/config_flow.py \
+                  custom_components/reolink_battery/recording_worker.py \
+                  custom_components/reolink_battery/diagnostics.py \
+                  custom_components/reolink_battery/translations/en.json \
+                  custom_components/reolink_battery/translations/he.json \
+                  custom_components/reolink_battery/manifest.json
+          git diff --cached --quiet || git commit -m "Add optional Telegram video delivery"
+          git push origin HEAD:feature/recording-worker-3b2
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f v0.1.2-beta.24
+          git push -f origin v0.1.2-beta.24
+          gh release delete v0.1.2-beta.24 --yes >/dev/null 2>&1 || true
+          gh release create v0.1.2-beta.24 \
+            --title "Reolink Battery v0.1.2-beta.24" \
+            --prerelease \
+            --target "$(git rev-parse HEAD)" \
+            --notes "Milestone 3B.4 optional Telegram delivery. Adds a Telegram Bot notify-entity selector to Configure. After the automatic worker has atomically saved and verified an MP4, it keeps recording completion independent from delivery, fires recording_ready as before, then optionally calls telegram_bot.send_video with entity_id, the local file and plain-text Hebrew caption. It preflights Home Assistant's allowed-path policy and exposes secret-safe delivery diagnostics. Telegram failure never causes a camera re-download or queue rollback."
