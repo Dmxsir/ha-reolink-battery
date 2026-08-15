@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
+from .events import parse_alarm_time
 from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
 from .recording_download_beta22 import stream_probe_state
 from .recording_probe import probe_state
@@ -23,6 +24,15 @@ def _hex_class(value: int | None) -> str | None:
     return f"0x{value:04x}" if isinstance(value, int) else None
 
 
+def _safe_post_time(value: object):
+    if value is None:
+        return None
+    try:
+        return parse_alarm_time(value)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> dict[str, Any]:
@@ -33,6 +43,9 @@ async def async_get_config_entry_diagnostics(
     prepare = download_prepare_state(entry.entry_id)
     stream = stream_probe_state(entry.entry_id)
     worker = entry.runtime_data.recording_worker
+    notification_state = hass.states.get(bridge.entity_id) if bridge else None
+    notification_attrs = notification_state.attributes if notification_state else {}
+    sensor_post_time = _safe_post_time(notification_attrs.get("post_time"))
     return {
         "device": {
             "model": entry.data.get(CONF_MODEL, ""),
@@ -83,6 +96,48 @@ async def async_get_config_entry_diagnostics(
             "last_camera_mapped": bool(bridge and bridge.last_camera_mapped),
             "last_event_queued": bool(bridge and bridge.last_event_queued),
             "duplicate_rejected": bool(bridge and bridge.last_duplicate_rejected),
+            "state_change_count": bridge.state_change_count if bridge else 0,
+            "reolink_match_count": bridge.reolink_match_count if bridge else 0,
+            "last_state_change_time": (
+                bridge.last_state_change_time.isoformat()
+                if bridge and bridge.last_state_change_time
+                else None
+            ),
+            "last_observed_post_time": (
+                bridge.last_observed_post_time.isoformat()
+                if bridge and bridge.last_observed_post_time
+                else None
+            ),
+            "previous_observed_post_time": (
+                bridge.previous_observed_post_time.isoformat()
+                if bridge and bridge.previous_observed_post_time
+                else None
+            ),
+            "last_post_time_changed": (
+                bridge.last_post_time_changed if bridge else None
+            ),
+            "event_id_fingerprint": (
+                bridge.last_event_id_fingerprint if bridge else ""
+            ),
+            "sensor_state_available": notification_state is not None,
+            "sensor_last_updated": (
+                notification_state.last_updated.isoformat()
+                if notification_state is not None
+                else None
+            ),
+            "sensor_post_time": (
+                sensor_post_time.isoformat() if sensor_post_time else None
+            ),
+            "sensor_post_time_matches_last_observed": (
+                sensor_post_time == bridge.last_observed_post_time
+                if bridge and sensor_post_time and bridge.last_observed_post_time
+                else None
+            ),
+            "sensor_package_is_reolink": (
+                notification_attrs.get("package") == "com.mcu.reolink"
+                if notification_state is not None
+                else None
+            ),
         },
         "recording_probe": {
             "manual_only": True,
