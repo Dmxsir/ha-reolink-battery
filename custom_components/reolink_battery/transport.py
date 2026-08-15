@@ -26,6 +26,10 @@ from reolink_aio.baichuan.util import (
 
 DISCOVERY_PORTS = (2018, 2015)
 DISCOVERY_MAGIC = bytes.fromhex("3acf872a")
+BAICHUAN_MAGIC = bytes.fromhex("f0debc0a")
+FILE_DOWNLOAD_MESSAGE_CLASS = 0x6482
+FILE_DOWNLOAD_CLASS_WIRE = FILE_DOWNLOAD_MESSAGE_CLASS.to_bytes(2, "little")
+MODERN_24_CLASS_WIRE = (0x6414).to_bytes(2, "little")
 
 
 def linux_ipv4_interface(source_ip: str) -> tuple[str, int]:
@@ -154,6 +158,20 @@ class UidLanLease:
             self.socket.close()
 
 
+@dataclass(frozen=True, slots=True)
+class FileDownloadFrameMetadata:
+    """Secret-safe metadata for the first cmd13 response frame."""
+
+    response_code: int
+    message_class: int
+    channel_id: int
+    stream_type: int
+    msg_num: int
+    body_length: int
+    payload_offset: int
+    payload_length: int
+
+
 def resolve_uid_lan(
     uid: str,
     interface: ipaddress.IPv4Interface,
@@ -218,9 +236,75 @@ def resolve_uid_lan(
 
 
 class _IdempotentUdpClientProtocol(BaichuanUdpClientProtocol):
-    """Make connection close idempotent as validated in Phase 2."""
+    """Make close idempotent and tolerate the file-download 0x6482 class."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._file_download_probe_future: asyncio.Future[
+            FileDownloadFrameMetadata
+        ] | None = None
+        self._patched_file_download_class = False
+
+    def arm_file_download_probe(self) -> asyncio.Future[FileDownloadFrameMetadata]:
+        """Observe the first complete cmd13 frame without retaining payload bytes."""
+        if (
+            self._file_download_probe_future is not None
+            and not self._file_download_probe_future.done()
+        ):
+            raise RuntimeError("file download probe already armed")
+        self._file_download_probe_future = self._loop.create_future()
+        return self._file_download_probe_future
+
+    def clear_file_download_probe(self) -> None:
+        """Drop the temporary observer."""
+        self._file_download_probe_future = None
+
+    def parse_bc_data(self) -> None:
+        """Teach the pinned reolink-aio parser that 0x6482 is a 24-byte class."""
+        data = self._data
+        if len(data) >= 20:
+            raw_class = data[18:20]
+            if raw_class == FILE_DOWNLOAD_CLASS_WIRE:
+                self._patched_file_download_class = True
+                patched = bytearray(data)
+                patched[18:20] = MODERN_24_CLASS_WIRE
+                self._data = bytes(patched)
+                data = self._data
+
+            cmd_id = int.from_bytes(data[4:8], "little")
+            body_length = int.from_bytes(data[8:12], "little")
+            if cmd_id == 13 and len(data) >= 24 + body_length:
+                future = self._file_download_probe_future
+                if future is not None and not future.done():
+                    response_code = int.from_bytes(data[16:18], "little")
+                    message_class = (
+                        FILE_DOWNLOAD_MESSAGE_CLASS
+                        if self._patched_file_download_class
+                        else int.from_bytes(data[18:20], "little")
+                    )
+                    payload_offset = int.from_bytes(data[20:24], "little")
+                    if payload_offset < 0 or payload_offset > body_length:
+                        payload_offset = body_length
+                    future.set_result(
+                        FileDownloadFrameMetadata(
+                            response_code=response_code,
+                            message_class=message_class,
+                            channel_id=data[12],
+                            stream_type=data[13],
+                            msg_num=int.from_bytes(data[14:16], "little"),
+                            body_length=body_length,
+                            payload_offset=payload_offset,
+                            payload_length=max(0, body_length - payload_offset),
+                        )
+                    )
+                self._patched_file_download_class = False
+
+        super().parse_bc_data()
 
     def connection_lost(self, exc: Exception | None = None) -> None:
+        future = self._file_download_probe_future
+        if future is not None and not future.done():
+            future.set_exception(exc or ConnectionError("Baichuan connection closed"))
         if not self.close_future.done():
             super().connection_lost(exc)
 
@@ -255,6 +339,22 @@ class BoundBaichuanUdpConnection(BaichuanUdpConnection):
             raise
         _, self._local_port = transport.get_extra_info("sockname")
         return transport, protocol
+
+    async def send_file_download_probe(
+        self, wire: bytes, *, timeout: float = 10.0
+    ) -> FileDownloadFrameMetadata:
+        """Send one prebuilt cmd13 frame and observe only its first response frame."""
+        if not self.connection_open:
+            await self.connect()
+        protocol = self._protocol
+        if not isinstance(protocol, _IdempotentUdpClientProtocol):
+            raise RuntimeError("unexpected Baichuan UDP protocol")
+        future = protocol.arm_file_download_probe()
+        try:
+            await self.send_without_wait(wire, cmd_id=13, timeout=min(timeout, 5.0))
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        finally:
+            protocol.clear_file_download_probe()
 
     async def close(self) -> None:
         protocol = self._protocol
