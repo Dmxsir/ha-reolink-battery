@@ -16,7 +16,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
-from reolink_aio.baichuan.udp_protocol import MTU
+from reolink_aio.baichuan.udp_protocol import MAGIC_UDP_ACK, MTU
 from reolink_aio.baichuan.util import (
     calc_crc,
     decrypt_udp_baichuan,
@@ -85,6 +85,9 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     udp_periodic_ack_interval_ms: float = 0.0
     udp_periodic_ack_count: int = 0
     udp_periodic_ack_gap_count: int = 0
+    udp_ack_inclusive_highest_enabled: bool = False
+    udp_ack_inclusive_highest_count: int = 0
+    udp_current_missing_packet_count_at_disconnect: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +213,9 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         self.udp_periodic_ack_interval_ms = 0.0
         self.udp_periodic_ack_count = 0
         self.udp_periodic_ack_gap_count = 0
+        self.udp_ack_inclusive_highest_enabled = True
+        self.udp_ack_inclusive_highest_count = 0
+        self.udp_current_missing_packet_count_at_disconnect = 0
         self._missing_seq_ids_seen: set[int] = set()
         self._recovered_missing_seq_ids: set[int] = set()
         self._missing_seq_first_seen_at: dict[int, float] = {}
@@ -323,23 +329,41 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
             )
 
     def send_ack(self) -> None:
-        will_send = (
-            self._transport is not None
-            and self.host_id is not None
-            and self._recv_seq_id >= 0
-        )
-        gap_bitmap = False
-        if will_send and self._seq_data:
+        """Send the RX ACK bitmap through the highest buffered sequence ID."""
+        if (
+            self._transport is None
+            or self.host_id is None
+            or self._recv_seq_id < 0
+        ):
+            return
+
+        payload = bytearray()
+        highest: int | None = None
+        if self._seq_data:
             highest = max(self._seq_data)
-            gap_bitmap = any(
-                seq_id not in self._seq_data
-                for seq_id in range(self._recv_seq_id + 1, highest)
-            )
-        super().send_ack()
-        if will_send:
-            self.udp_ack_sent_count += 1
-            if gap_bitmap:
-                self.udp_ack_with_gap_bitmap_count += 1
+            for seq_id in range(self._recv_seq_id + 1, highest + 1):
+                payload.append(1 if seq_id in self._seq_data else 0)
+
+        host_id_bytes = self.host_id.to_bytes(4, byteorder="little")
+        seq_id_bytes = self._recv_seq_id.to_bytes(4, byteorder="little")
+        payload_len_bytes = len(payload).to_bytes(4, byteorder="little")
+        udp_header = (
+            bytes.fromhex(MAGIC_UDP_ACK)
+            + host_id_bytes
+            + bytes.fromhex("0000000000000000")
+            + seq_id_bytes
+            + bytes.fromhex("00000000")
+            + payload_len_bytes
+        )
+        self._transport.sendto(
+            udp_header + bytes(payload), (self._host, self.remote_port)
+        )
+
+        self.udp_ack_sent_count += 1
+        if 0 in payload:
+            self.udp_ack_with_gap_bitmap_count += 1
+        if highest is not None:
+            self.udp_ack_inclusive_highest_count += 1
 
     def send_periodic_ack(self) -> bool:
         """Repeat the existing reolink-aio ACK state without changing its wire format."""
@@ -375,6 +399,16 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
                 max(self._seq_data) if self._seq_data else None
             )
             self.udp_expected_next_seq_at_disconnect = self._recv_seq_id + 1
+            if self._seq_data:
+                highest = max(self._seq_data)
+                current_window = set(
+                    range(self._recv_seq_id + 1, highest + 1)
+                )
+                self.udp_current_missing_packet_count_at_disconnect = len(
+                    current_window - set(self._seq_data)
+                )
+            else:
+                self.udp_current_missing_packet_count_at_disconnect = 0
         super().parse_udp_connection(port)
 
     def connection_lost(self, exc: Exception | None = None) -> None:
@@ -588,6 +622,15 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             trace.udp_periodic_ack_count = snapshot_protocol.udp_periodic_ack_count
             trace.udp_periodic_ack_gap_count = (
                 snapshot_protocol.udp_periodic_ack_gap_count
+            )
+            trace.udp_ack_inclusive_highest_enabled = (
+                snapshot_protocol.udp_ack_inclusive_highest_enabled
+            )
+            trace.udp_ack_inclusive_highest_count = (
+                snapshot_protocol.udp_ack_inclusive_highest_count
+            )
+            trace.udp_current_missing_packet_count_at_disconnect = (
+                snapshot_protocol.udp_current_missing_packet_count_at_disconnect
             )
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:

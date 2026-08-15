@@ -339,6 +339,15 @@ async def async_get_config_entry_diagnostics(
                 "udp_periodic_ack_gap_count": (
                     stream.udp_periodic_ack_gap_count
                 ),
+                "udp_ack_inclusive_highest_enabled": (
+                    stream.udp_ack_inclusive_highest_enabled
+                ),
+                "udp_ack_inclusive_highest_count": (
+                    stream.udp_ack_inclusive_highest_count
+                ),
+                "udp_current_missing_packet_count_at_disconnect": (
+                    stream.udp_current_missing_packet_count_at_disconnect
+                ),
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -412,7 +421,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.10-periodic-rx-ack",
+        "milestone": "3B.11-inclusive-rx-ack-bitmap",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }
