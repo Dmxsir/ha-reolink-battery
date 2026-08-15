@@ -1,0 +1,211 @@
+name: Publish beta.30 single lease handoff
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta30-single-lease.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Apply beta.30 source changes
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          transport_path = Path("custom_components/reolink_battery/transport.py")
+          transport = transport_path.read_text()
+          old_import = '''from reolink_aio.baichuan.util import (\n    calc_crc,\n    decrypt_udp_baichuan,\n    encrypt_udp_baichuan,\n)\n'''
+          new_import = old_import + 'from reolink_aio.exceptions import ReolinkConnectionError\n'
+          assert old_import in transport, "beta29 transport import anchor not found"
+          transport = transport.replace(old_import, new_import, 1)
+
+          old_lease = '''@dataclass(slots=True)\nclass UidLanLease:\n    \"\"\"Temporary UID discovery lease retained until transport is open.\"\"\"\n\n    host: str\n    port: int\n    source_ip: str\n    interface_index: int\n    client_id: int\n    device_id: int\n    socket: socket.socket\n\n    def close(self) -> None:\n        if self.socket.fileno() < 0:\n            return\n        body = xmls.UDP_DISCONNECT_XML.format(\n            client_id=self.client_id, host_id=self.device_id\n        )\n        try:\n            self.socket.sendto(_packet(body), (self.host, self.port))\n        finally:\n            self.socket.close()\n'''
+          new_lease = '''@dataclass(slots=True)\nclass UidLanLease:\n    \"\"\"UID discovery lease whose live socket can be handed to Baichuan.\"\"\"\n\n    host: str\n    port: int\n    source_ip: str\n    interface_index: int\n    client_id: int\n    device_id: int\n    transaction_id: int\n    socket: socket.socket | None\n\n    def detach_socket(self) -> socket.socket:\n        \"\"\"Transfer socket ownership without sending a discovery disconnect.\"\"\"\n        sock = self.socket\n        if sock is None or sock.fileno() < 0:\n            raise RuntimeError(\"UID LAN lease socket is not available\")\n        self.socket = None\n        return sock\n\n    def close(self) -> None:\n        sock = self.socket\n        if sock is None or sock.fileno() < 0:\n            return\n        body = xmls.UDP_DISCONNECT_XML.format(\n            client_id=self.client_id, host_id=self.device_id\n        )\n        try:\n            sock.sendto(_packet(body), (self.host, self.port))\n        finally:\n            sock.close()\n            self.socket = None\n'''
+          assert old_lease in transport, "beta29 UidLanLease anchor not found"
+          transport = transport.replace(old_lease, new_lease, 1)
+
+          old_packet = '''    packet = _packet(body)\n    targets = _broadcast_targets(interface)\n'''
+          new_packet = '''    packet = _packet(body)\n    transaction_id = int.from_bytes(packet[12:16], \"little\")\n    targets = _broadcast_targets(interface)\n'''
+          assert old_packet in transport, "beta29 discovery packet anchor not found"
+          transport = transport.replace(old_packet, new_packet, 1)
+
+          old_return = '''                    client_id,\n                    device_id,\n                    sock,\n                )\n'''
+          new_return = '''                    client_id,\n                    device_id,\n                    transaction_id,\n                    sock,\n                )\n'''
+          assert old_return in transport, "beta29 lease return anchor not found"
+          transport = transport.replace(old_return, new_return, 1)
+
+          old_bound = '''class BoundBaichuanUdpConnection(BaichuanUdpConnection):\n    \"\"\"Baichuan UDP connection pinned to the selected source IPv4.\"\"\"\n\n    def __init__(self, host: str, source_ip: str, *args, **kwargs) -> None:\n        super().__init__(host, *args, **kwargs)\n        self.source_ip = source_ip\n\n    async def _create_connection(\n        self,\n    ) -> tuple[asyncio.DatagramTransport, BaichuanUdpClientProtocol]:\n        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n        try:\n            sock.bind((self.source_ip, 0))\n            sock.setblocking(False)\n            transport, protocol = await self._loop.create_datagram_endpoint(\n                lambda: _IdempotentUdpClientProtocol(\n                    self._loop,\n                    self._host,\n                    self.drop_connection(),\n                    self.cancel_ack_timeout,\n                    self._push_callback,\n                    self._close_callback,\n                ),\n                sock=sock,\n            )\n        except BaseException:\n            sock.close()\n            raise\n        _, self._local_port = transport.get_extra_info(\"sockname\")\n        return transport, protocol\n'''
+          new_bound = '''class BoundBaichuanUdpConnection(BaichuanUdpConnection):\n    \"\"\"Baichuan UDP connection pinned to the selected source IPv4.\"\"\"\n\n    def __init__(\n        self,\n        host: str,\n        source_ip: str,\n        *args,\n        handoff_lease: UidLanLease | None = None,\n        **kwargs,\n    ) -> None:\n        super().__init__(host, *args, **kwargs)\n        self.source_ip = source_ip\n        self._handoff_mode = handoff_lease is not None\n        self._handoff_lease = handoff_lease\n        self._handoff_active = False\n        self._handoff_transaction_id: int | None = None\n\n    def _take_handoff_socket(\n        self,\n    ) -> tuple[socket.socket, UidLanLease] | None:\n        lease = self._handoff_lease\n        if lease is None:\n            return None\n        if lease.host != self._host or lease.source_ip != self.source_ip:\n            raise OSError(\"UID LAN lease does not match requested Baichuan endpoint\")\n        sock = lease.detach_socket()\n        self._handoff_lease = None\n        self._handoff_active = True\n        self._handoff_transaction_id = lease.transaction_id\n        return sock, lease\n\n    def _apply_handoff_protocol(\n        self, protocol: BaichuanUdpClientProtocol, lease: UidLanLease\n    ) -> None:\n        protocol.client_id = lease.client_id\n        protocol.host_id = lease.device_id\n        protocol.remote_port = lease.port\n        self._port = lease.port\n\n    async def connect(self):\n        \"\"\"Adopt the discovery socket once; never create a second P2P identity.\"\"\"\n        if not self._handoff_mode:\n            await super().connect()\n            return\n        if self.connection_open:\n            return\n        if self._handoff_lease is None:\n            raise ReolinkConnectionError(\n                f\"Baichuan host {self._host}: single lease session cannot be reopened\"\n            )\n        await BaichuanBaseConnection.connect(self)\n        if not self.connection_open:\n            raise ReolinkConnectionError(\n                f\"Baichuan host {self._host}: single lease handoff did not open\"\n            )\n\n    async def _create_connection(\n        self,\n    ) -> tuple[asyncio.DatagramTransport, BaichuanUdpClientProtocol]:\n        handoff = self._take_handoff_socket()\n        lease = None\n        if handoff is None:\n            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n            sock.bind((self.source_ip, 0))\n        else:\n            sock, lease = handoff\n        try:\n            sock.setblocking(False)\n            transport, protocol = await self._loop.create_datagram_endpoint(\n                lambda: _IdempotentUdpClientProtocol(\n                    self._loop,\n                    self._host,\n                    self.drop_connection(),\n                    self.cancel_ack_timeout,\n                    self._push_callback,\n                    self._close_callback,\n                ),\n                sock=sock,\n            )\n        except BaseException:\n            sock.close()\n            raise\n        _, self._local_port = transport.get_extra_info(\"sockname\")\n        if lease is not None:\n            self._apply_handoff_protocol(protocol, lease)\n        return transport, protocol\n'''
+          assert old_bound in transport, "beta29 BoundBaichuanUdpConnection anchor not found"
+          transport = transport.replace(old_bound, new_bound, 1)
+          transport_path.write_text(transport)
+
+          beta20_path = Path("custom_components/reolink_battery/recording_download_probe_beta20.py")
+          beta20 = beta20_path.read_text()
+          old_create = '''    async def _create_connection(self):\n        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n        try:\n            sock.bind((self.source_ip, 0))\n            sock.setblocking(False)\n            created = await self._loop.create_datagram_endpoint(\n                lambda: _P2PHeartbeatProbeProtocol(\n                    self._loop,\n                    self._host,\n                    self.drop_connection(),\n                    self.cancel_ack_timeout,\n                    self._push_callback,\n                    self._close_callback,\n                ),\n                sock=sock,\n            )\n        except BaseException:\n            sock.close()\n            raise\n        transport, protocol = created\n        _, self._local_port = transport.get_extra_info(\"sockname\")\n        return transport, protocol\n'''
+          new_create = '''    async def _create_connection(self):\n        handoff = self._take_handoff_socket()\n        lease = None\n        if handoff is None:\n            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n            sock.bind((self.source_ip, 0))\n        else:\n            sock, lease = handoff\n        try:\n            sock.setblocking(False)\n            created = await self._loop.create_datagram_endpoint(\n                lambda: _P2PHeartbeatProbeProtocol(\n                    self._loop,\n                    self._host,\n                    self.drop_connection(),\n                    self.cancel_ack_timeout,\n                    self._push_callback,\n                    self._close_callback,\n                ),\n                sock=sock,\n            )\n        except BaseException:\n            sock.close()\n            raise\n        transport, protocol = created\n        _, self._local_port = transport.get_extra_info(\"sockname\")\n        if lease is not None:\n            self._apply_handoff_protocol(protocol, lease)\n            self._p2p_heartbeat_tid = self._handoff_transaction_id\n        return transport, protocol\n'''
+          assert old_create in beta20, "beta29 beta20 connection anchor not found"
+          beta20 = beta20.replace(old_create, new_create, 1)
+          beta20_path.write_text(beta20)
+
+          prepare_path = Path("custom_components/reolink_battery/recording_download_probe.py")
+          prepare = prepare_path.read_text()
+          old_connection = '''            host.baichuan._close_callback,\n            uid=uid,\n        )\n        host.baichuan._connection = connection\n\n        failure_stage = \"WAKE_ERROR\"\n        await connection.connect()\n        lease.close()\n        lease = None\n'''
+          new_connection = '''            host.baichuan._close_callback,\n            uid=uid,\n            handoff_lease=lease,\n        )\n        host.baichuan._connection = connection\n\n        failure_stage = \"WAKE_ERROR\"\n        await connection.connect()\n        if lease.socket is not None:\n            raise RuntimeError(\"single lease handoff was not adopted\")\n        lease = None\n'''
+          assert old_connection in prepare, "beta29 download handoff anchor not found"
+          prepare = prepare.replace(old_connection, new_connection, 1)
+          prepare_path.write_text(prepare)
+
+          beta22_path = Path("custom_components/reolink_battery/recording_download_beta22.py")
+          beta22 = beta22_path.read_text()
+          beta22 = beta22.replace(
+              'from dataclasses import dataclass\n',
+              'from dataclasses import dataclass\nfrom datetime import datetime\n',
+              1,
+          )
+          old_trace = '''    sha256_present: bool = False\n    output_private_path: bool = True\n'''
+          new_trace = '''    sha256_present: bool = False\n    output_private_path: bool = True\n    telemetry_owner: str = \"manual\"\n    telemetry_event_time: datetime | None = None\n    single_lease_handoff: bool = False\n    single_lease_socket_reused: bool = False\n    single_lease_ids_reused: bool = False\n    single_lease_transaction_id_reused: bool = False\n    secondary_connect_sent: bool = False\n'''
+          assert old_trace in beta22, "beta29 verified trace anchor not found"
+          beta22 = beta22.replace(old_trace, new_trace, 1)
+          old_context = '''_OUTPUT_DIR: ContextVar[str | None] = ContextVar(\n    \"reolink_battery_beta22_output_dir\", default=None\n)\n'''
+          new_context = old_context + '''_TELEMETRY_OWNER: ContextVar[str] = ContextVar(\n    \"reolink_battery_beta30_telemetry_owner\", default=\"manual\"\n)\n_TELEMETRY_EVENT_TIME: ContextVar[datetime | None] = ContextVar(\n    \"reolink_battery_beta30_telemetry_event_time\", default=None\n)\n'''
+          assert old_context in beta22, "beta29 output context anchor not found"
+          beta22 = beta22.replace(old_context, new_context, 1)
+          old_new_trace = '''def _new_trace(*, attempted: bool = False) -> VerifiedFileTrace:\n    return VerifiedFileTrace(\n        attempted=attempted,\n        sample_limit_bytes=beta21.STREAM_SAMPLE_MAX_BYTES,\n        sample_limit_frames=beta21.STREAM_SAMPLE_MAX_FRAMES,\n        aggregate_limit_bytes=beta21.STREAM_SAMPLE_MAX_BYTES,\n        keepalive_attempted=False,\n        keepalive_count=0,\n        keepalive_interval_seconds=0.0,\n    )\n'''
+          new_new_trace = '''def _new_trace(\n    *,\n    attempted: bool = False,\n    telemetry_owner: str | None = None,\n    telemetry_event_time: datetime | None = None,\n) -> VerifiedFileTrace:\n    return VerifiedFileTrace(\n        attempted=attempted,\n        sample_limit_bytes=beta21.STREAM_SAMPLE_MAX_BYTES,\n        sample_limit_frames=beta21.STREAM_SAMPLE_MAX_FRAMES,\n        aggregate_limit_bytes=beta21.STREAM_SAMPLE_MAX_BYTES,\n        keepalive_attempted=False,\n        keepalive_count=0,\n        keepalive_interval_seconds=0.0,\n        telemetry_owner=telemetry_owner or _TELEMETRY_OWNER.get(),\n        telemetry_event_time=(\n            telemetry_event_time\n            if telemetry_event_time is not None\n            else _TELEMETRY_EVENT_TIME.get()\n        ),\n    )\n'''
+          assert old_new_trace in beta22, "beta29 _new_trace anchor not found"
+          beta22 = beta22.replace(old_new_trace, new_new_trace, 1)
+          old_reset = '''def reset_stream_probe_state(entry_id: str) -> None:\n    _STREAM_STATES[entry_id] = _new_trace(attempted=True)\n'''
+          new_reset = '''def reset_stream_probe_state(\n    entry_id: str,\n    *,\n    telemetry_owner: str = \"manual\",\n    telemetry_event_time: datetime | None = None,\n) -> None:\n    _STREAM_STATES[entry_id] = _new_trace(\n        attempted=True,\n        telemetry_owner=telemetry_owner,\n        telemetry_event_time=telemetry_event_time,\n    )\n'''
+          assert old_reset in beta22, "beta29 reset trace anchor not found"
+          beta22 = beta22.replace(old_reset, new_reset, 1)
+          old_prepare_trace = '''        self._stream_trace = _new_trace(attempted=True)\n        output_dir = _OUTPUT_DIR.get()\n'''
+          new_prepare_trace = '''        self._stream_trace = _new_trace(attempted=True)\n        self._stream_trace.single_lease_handoff = bool(\n            getattr(self, \"_handoff_mode\", False)\n        )\n        self._stream_trace.single_lease_socket_reused = bool(\n            getattr(self, \"_handoff_active\", False)\n        )\n        self._stream_trace.single_lease_ids_reused = (\n            self._stream_trace.single_lease_socket_reused\n            and getattr(self._protocol, \"client_id\", None) is not None\n            and getattr(self._protocol, \"host_id\", None) is not None\n        )\n        self._stream_trace.single_lease_transaction_id_reused = (\n            self._stream_trace.single_lease_socket_reused\n            and getattr(self, \"_handoff_transaction_id\", None) is not None\n            and getattr(self, \"_p2p_heartbeat_tid\", None)\n            == getattr(self, \"_handoff_transaction_id\", None)\n        )\n        self._stream_trace.secondary_connect_sent = not (\n            self._stream_trace.single_lease_handoff\n            and self._stream_trace.single_lease_socket_reused\n        )\n        output_dir = _OUTPUT_DIR.get()\n'''
+          assert old_prepare_trace in beta22, "beta29 verified prepare trace anchor not found"
+          beta22 = beta22.replace(old_prepare_trace, new_prepare_trace, 1)
+          old_wrapper = '''async def async_prepare_download_for_event(\n    *args,\n    output_dir: str | None = None,\n    **kwargs,\n):\n    \"\"\"Run beta.21 protocol and persist a verified MP4 to a private directory.\"\"\"\n    if not output_dir:\n        raise RuntimeError(\"beta22 output_dir is required\")\n    token = _OUTPUT_DIR.set(output_dir)\n    try:\n        return await beta21.async_prepare_download_for_event(*args, **kwargs)\n    finally:\n        _OUTPUT_DIR.reset(token)\n'''
+          new_wrapper = '''async def async_prepare_download_for_event(\n    *args,\n    output_dir: str | None = None,\n    telemetry_owner: str = \"manual\",\n    telemetry_event_time: datetime | None = None,\n    **kwargs,\n):\n    \"\"\"Run beta.21 protocol and persist a verified MP4 to a private directory.\"\"\"\n    if not output_dir:\n        raise RuntimeError(\"beta22 output_dir is required\")\n    output_token = _OUTPUT_DIR.set(output_dir)\n    owner_token = _TELEMETRY_OWNER.set(telemetry_owner)\n    event_token = _TELEMETRY_EVENT_TIME.set(telemetry_event_time)\n    try:\n        return await beta21.async_prepare_download_for_event(*args, **kwargs)\n    finally:\n        _TELEMETRY_EVENT_TIME.reset(event_token)\n        _TELEMETRY_OWNER.reset(owner_token)\n        _OUTPUT_DIR.reset(output_token)\n'''
+          assert old_wrapper in beta22, "beta29 beta22 wrapper anchor not found"
+          beta22 = beta22.replace(old_wrapper, new_wrapper, 1)
+          beta22_path.write_text(beta22)
+
+          worker_path = Path("custom_components/reolink_battery/recording_worker.py")
+          worker = worker_path.read_text()
+          old_worker_reset = '''        reset_stream_probe_state(self._entry.entry_id)\n\n        media_dirs = self._hass.config.media_dirs\n'''
+          new_worker_reset = '''        event_time = event.notification_post_time or event.alarm_time\n        reset_stream_probe_state(\n            self._entry.entry_id,\n            telemetry_owner=\"worker\",\n            telemetry_event_time=event_time,\n        )\n\n        media_dirs = self._hass.config.media_dirs\n'''
+          assert old_worker_reset in worker, "beta29 worker reset anchor not found"
+          worker = worker.replace(old_worker_reset, new_worker_reset, 1)
+          old_worker_call = '''                    self._hass.config.time_zone,\n                    output_dir=str(output_dir),\n                )\n'''
+          new_worker_call = '''                    self._hass.config.time_zone,\n                    output_dir=str(output_dir),\n                    telemetry_owner=\"worker\",\n                    telemetry_event_time=event_time,\n                )\n'''
+          assert old_worker_call in worker, "beta29 worker call anchor not found"
+          worker = worker.replace(old_worker_call, new_worker_call, 1)
+          worker_path.write_text(worker)
+
+          button_path = Path("custom_components/reolink_battery/button.py")
+          button = button_path.read_text()
+          old_button_call = '''                    self.hass.config.time_zone,\n                    output_dir=self.hass.config.path(\"reolink_battery\", \"recordings\"),\n                )\n'''
+          new_button_call = '''                    self.hass.config.time_zone,\n                    output_dir=self.hass.config.path(\"reolink_battery\", \"recordings\"),\n                    telemetry_owner=\"manual\",\n                    telemetry_event_time=event.notification_post_time or event.alarm_time,\n                )\n'''
+          assert old_button_call in button, "beta29 manual call anchor not found"
+          button = button.replace(old_button_call, new_button_call, 1)
+          button_path.write_text(button)
+
+          diagnostics_path = Path("custom_components/reolink_battery/diagnostics.py")
+          diagnostics = diagnostics_path.read_text()
+          old_diag = '''                \"output_private_path\": stream.output_private_path,\n                \"remote_disconnect_observed\": stream.remote_disconnect_observed,\n'''
+          new_diag = '''                \"output_private_path\": stream.output_private_path,\n                \"telemetry_owner\": stream.telemetry_owner,\n                \"telemetry_event_time\": (\n                    stream.telemetry_event_time.isoformat()\n                    if stream.telemetry_event_time\n                    else None\n                ),\n                \"single_lease_handoff\": stream.single_lease_handoff,\n                \"single_lease_socket_reused\": stream.single_lease_socket_reused,\n                \"single_lease_ids_reused\": stream.single_lease_ids_reused,\n                \"single_lease_transaction_id_reused\": (\n                    stream.single_lease_transaction_id_reused\n                ),\n                \"secondary_connect_sent\": stream.secondary_connect_sent,\n                \"remote_disconnect_observed\": stream.remote_disconnect_observed,\n'''
+          assert old_diag in diagnostics, "beta29 diagnostics stream anchor not found"
+          diagnostics = diagnostics.replace(old_diag, new_diag, 1)
+          diagnostics = diagnostics.replace(
+              '"milestone": "3B.5-notification-telemetry"',
+              '"milestone": "3B.5-single-lease-handoff"',
+              1,
+          )
+          diagnostics_path.write_text(diagnostics)
+
+          test_path = Path("tests/test_recording_download_beta30.py")
+          test_path.write_text('''\"\"\"Offline beta.30 tests for single UID/LAN lease handoff.\"\"\"\n\nfrom __future__ import annotations\n\nimport importlib\nimport socket\nimport sys\nimport types\nimport unittest\nfrom pathlib import Path\n\nROOT = Path(__file__).parents[1]\nCOMPONENT = ROOT / \"custom_components\" / \"reolink_battery\"\nPACKAGE = \"_reolink_battery_download_beta30_test\"\npackage = types.ModuleType(PACKAGE)\npackage.__path__ = [str(COMPONENT)]\nsys.modules[PACKAGE] = package\nbeta20 = importlib.import_module(f\"{PACKAGE}.recording_download_probe_beta20\")\ntransport_mod = beta20.beta17.transport_mod\n\n\nclass LeaseOwnershipTests(unittest.TestCase):\n    def test_detach_transfers_socket_without_disconnect(self):\n        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n        sock.bind((\"127.0.0.1\", 0))\n        lease = transport_mod.UidLanLease(\n            \"127.0.0.1\", 29999, \"127.0.0.1\", 1, 111, 222, 333, sock\n        )\n        taken = lease.detach_socket()\n        self.assertIs(taken, sock)\n        self.assertIsNone(lease.socket)\n        lease.close()\n        self.assertGreaterEqual(taken.fileno(), 0)\n        taken.close()\n\n\nclass SingleLeaseConnectionTests(unittest.IsolatedAsyncioTestCase):\n    async def test_handoff_reuses_socket_ids_port_and_transaction_id(self):\n        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n        sock.bind((\"127.0.0.1\", 0))\n        local_port = sock.getsockname()[1]\n        lease = transport_mod.UidLanLease(\n            \"127.0.0.1\", 29998, \"127.0.0.1\", 1, 444, 555, 666, sock\n        )\n        connection = beta20._P2PHeartbeatFullTransferConnection(\n            \"127.0.0.1\",\n            \"127.0.0.1\",\n            0,\n            None,\n            None,\n            uid=\"ABC123\",\n            handoff_lease=lease,\n        )\n        await connection.connect()\n        try:\n            self.assertTrue(connection.connection_open)\n            self.assertTrue(connection._handoff_mode)\n            self.assertTrue(connection._handoff_active)\n            self.assertIsNone(lease.socket)\n            self.assertEqual(connection._local_port, local_port)\n            self.assertEqual(connection._port, 29998)\n            self.assertEqual(connection._protocol.client_id, 444)\n            self.assertEqual(connection._protocol.host_id, 555)\n            self.assertEqual(connection._protocol.remote_port, 29998)\n            self.assertEqual(connection._handoff_transaction_id, 666)\n            self.assertEqual(connection._p2p_heartbeat_tid, 666)\n        finally:\n            await transport_mod.BaichuanBaseConnection.close(connection)\n\n    async def test_consumed_handoff_never_falls_back_to_second_connect(self):\n        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n        sock.bind((\"127.0.0.1\", 0))\n        lease = transport_mod.UidLanLease(\n            \"127.0.0.1\", 29997, \"127.0.0.1\", 1, 777, 888, 999, sock\n        )\n        connection = beta20._P2PHeartbeatFullTransferConnection(\n            \"127.0.0.1\", \"127.0.0.1\", 0, None, None, uid=\"ABC123\", handoff_lease=lease\n        )\n        await connection.connect()\n        await transport_mod.BaichuanBaseConnection.close(connection)\n        with self.assertRaises(transport_mod.ReolinkConnectionError):\n            await connection.connect()\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n''')
+
+          manifest_path = Path("custom_components/reolink_battery/manifest.json")
+          manifest = json.loads(manifest_path.read_text())
+          assert manifest["version"] == "0.1.2-beta.29"
+          manifest["version"] = "0.1.2-beta.30"
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+      - name: Validate beta.30
+        run: |
+          python -m pip install --upgrade pip
+          pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+          python -m compileall -q custom_components/reolink_battery tests
+          python -m unittest \
+            tests.test_recording_download_beta30 \
+            tests.test_recording_download_beta20 \
+            tests.test_recording_download_probe \
+            tests.test_recording_download_beta12 \
+            tests.test_notification_bridge
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("custom_components/reolink_battery/manifest.json").read_text())
+          assert manifest["version"] == "0.1.2-beta.30"
+          transport = Path("custom_components/reolink_battery/transport.py").read_text()
+          assert "detach_socket" in transport
+          assert "single lease session cannot be reopened" in transport
+          prepare = Path("custom_components/reolink_battery/recording_download_probe.py").read_text()
+          assert "handoff_lease=lease" in prepare
+          assert "lease.close()\n        lease = None" not in prepare
+          beta20 = Path("custom_components/reolink_battery/recording_download_probe_beta20.py").read_text()
+          assert "self._p2p_heartbeat_tid = self._handoff_transaction_id" in beta20
+          diagnostics = Path("custom_components/reolink_battery/diagnostics.py").read_text()
+          assert '"single_lease_handoff"' in diagnostics
+          assert '"telemetry_owner"' in diagnostics
+          assert '"milestone": "3B.5-single-lease-handoff"' in diagnostics
+          PY
+
+      - name: Commit beta.30 source
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            custom_components/reolink_battery/transport.py \
+            custom_components/reolink_battery/recording_download_probe.py \
+            custom_components/reolink_battery/recording_download_probe_beta20.py \
+            custom_components/reolink_battery/recording_download_beta22.py \
+            custom_components/reolink_battery/recording_worker.py \
+            custom_components/reolink_battery/button.py \
+            custom_components/reolink_battery/diagnostics.py \
+            custom_components/reolink_battery/manifest.json \
+            tests/test_recording_download_beta30.py
+          git commit -m "Use single UID LAN lease for beta.30"
+          git push origin HEAD:feature/recording-worker-3b2
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v0.1.2-beta.30
+          TARGET_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          gh release create "$TAG" \
+            --target "$TARGET_SHA" \
+            --prerelease \
+            --title "$TAG" \
+            --notes "Milestone 3B.5 single-lease transport experiment on top of beta.29. The UID/LAN discovery C2D_C socket is now handed directly to the authenticated Baichuan session with the same local UDP socket, client id, device id, remote port and discovery transaction id. No second C2D_C is sent and a consumed single-lease session is never silently reopened; outer worker retries still create a fresh lease after the existing 30s/60s waits. The proven cmd14/15/16 search, cmd13 prepare, handle-bound full-high/mainStream cmd8, P2P heartbeat cadence, verified atomic MP4 persistence, notification queue, 60-second settle and HA Media event handoff are unchanged. Diagnostics now identify worker vs manual stream telemetry and expose secret-safe single-lease reuse flags. No cmd9 is introduced in this build."
