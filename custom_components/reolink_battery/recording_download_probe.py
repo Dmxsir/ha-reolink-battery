@@ -45,7 +45,7 @@ DOWNLOAD_STREAM_TYPE = 0
 MESSAGE_NUM_MODULUS = 1 << 16
 ACCEPTED_PREPARE_RESPONSE_CODES = frozenset({0, 200, 201, 300})
 ROUTING_LAYOUT = "file_download_ch_stream_msgnum16"
-CONTENT_LAYOUT = "fileinfo_identity_plus_stream_type_file_type"
+CONTENT_LAYOUT = "fileinfo_identity_plus_stream_type_file_type_record_type"
 
 
 class DownloadPrepareError(CameraStageError):
@@ -314,12 +314,16 @@ def _download_xml(
     display_name: str,
     stream_type: str = "",
     file_type: str = "",
+    record_type: str = "",
 ) -> str:
     """Build FileInfoList download body from selected FileInfo metadata."""
     stream_type_xml = (
         f'<streamType>{escape(stream_type)}</streamType>\n' if stream_type else ""
     )
     file_type_xml = f'<fileType>{escape(file_type)}</fileType>\n' if file_type else ""
+    record_type_xml = (
+        f'<recordType>{escape(record_type)}</recordType>\n' if record_type else ""
+    )
     return (
         '<?xml version="1.0" encoding="UTF-8" ?>\n'
         '<body>\n<FileInfoList version="1.1">\n<FileInfo>\n'
@@ -330,6 +334,7 @@ def _download_xml(
         f'<Id>{escape(record_id)}</Id>\n'
         f'{stream_type_xml}'
         f'{file_type_xml}'
+        f'{record_type_xml}'
         '</FileInfo>\n</FileInfoList>\n</body>'
     )
 
@@ -358,7 +363,7 @@ def _build_cmd13_wire(
     uid: str,
     candidate: RecordingCandidate,
 ) -> tuple[bytes, Cmd13RequestMetadata, RecordingIdentityTrace]:
-    """Build cmd13 with beta.11 framing plus exact stream/file type metadata."""
+    """Build cmd13 with beta.12 framing plus exact recordType metadata."""
     xml_channel_id, record_id, file_name, display_name, identity_trace = (
         _resolve_download_identity(candidate)
     )
@@ -371,6 +376,7 @@ def _build_cmd13_wire(
         display_name=display_name,
         stream_type=candidate.stream_type,
         file_type=candidate.file_type,
+        record_type=candidate.record_type,
     ).encode("utf-8")
     encrypted_extension = baichuan._aes_encrypt(extension)
     encrypted_payload = baichuan._aes_encrypt(payload)
