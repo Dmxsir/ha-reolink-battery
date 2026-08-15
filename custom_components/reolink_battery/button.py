@@ -22,7 +22,7 @@ from .const import (
     CONF_UID,
     DOMAIN,
 )
-from .recording_download_probe_beta17 import (
+from .recording_download_probe_beta18 import (
     apply_file_info_trace,
     apply_identity_trace,
     apply_stream_probe_trace,
@@ -158,7 +158,7 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Probe the accepted cmd13 and sample its same-session continuation."""
+    """Probe accepted cmd13 then sample cmd8 media in the same session."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -182,7 +182,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Find the queued recording, issue cmd13, sample continuation, then close."""
+        """Find recording, issue accepted cmd13 then bounded cmd8, then close."""
         event = next(
             (
                 item

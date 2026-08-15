@@ -184,7 +184,7 @@ class _Cmd8ProbeConnection(beta17._StreamProbeConnection):
         *,
         expected_msg_num: int,
         timeout: float = 10.0,
-    ) -> base.FileDownloadFrameMetadata:
+    ) -> beta17.transport_mod.FileDownloadFrameMetadata:
         """Send accepted cmd13, then cmd8, and sample both in the same session."""
         if not self.connection_open:
             await self.connect()

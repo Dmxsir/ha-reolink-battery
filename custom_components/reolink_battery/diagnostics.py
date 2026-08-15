@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
 from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
-from .recording_download_probe_beta17 import stream_probe_state
+from .recording_download_probe_beta18 import stream_probe_state
 from .recording_probe import probe_state
 
 
@@ -204,6 +204,17 @@ async def async_get_config_entry_diagnostics(
                 "total_body_bytes": stream.total_body_bytes,
                 "cmd13_frames": stream.cmd13_frames,
                 "cmd8_frames": stream.cmd8_frames,
+                "cmd8_attempted": stream.cmd8_attempted,
+                "cmd8_request_msg_num": stream.cmd8_request_msg_num,
+                "cmd8_request_body_length": stream.cmd8_request_body_length,
+                "cmd8_request_payload_offset": stream.cmd8_request_payload_offset,
+                "cmd8_first_response_code": stream.cmd8_first_response_code,
+                "cmd8_first_body_length": stream.cmd8_first_body_length,
+                "cmd8_first_kind": stream.cmd8_first_kind or None,
+                "cmd8_xml_frames": stream.cmd8_xml_frames,
+                "cmd8_media_frames": stream.cmd8_media_frames,
+                "cmd8_unknown_frames": stream.cmd8_unknown_frames,
+                "cmd8_media_observed": stream.cmd8_media_observed,
                 "distinct_msg_num_count": stream.distinct_msg_num_count,
                 "max_body_length": stream.max_body_length,
                 "response_codes": list(stream.response_codes),
@@ -230,9 +241,9 @@ async def async_get_config_entry_diagnostics(
             },
             "media_payload_observed": stream.media_frames > 0,
             "full_media_download_attempted": False,
-            "cmd8_attempted": False,
+            "cmd8_attempted": stream.cmd8_attempted,
         },
-        "milestone": "3B.2b-cmd13-stream-shape-probe",
+        "milestone": "3B.2b-cmd13-prepare-cmd8-media-shape-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
