@@ -16,6 +16,7 @@ package = types.ModuleType(PACKAGE)
 package.__path__ = [str(COMPONENT)]
 sys.modules[PACKAGE] = package
 probe = importlib.import_module(f"{PACKAGE}.recording_download_probe")
+recording_probe = importlib.import_module(f"{PACKAGE}.recording_probe")
 
 
 class _FakeBaichuan:
@@ -106,14 +107,52 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         )
 
     def test_prepare_error_keeps_only_safe_protocol_metadata(self):
+        trace = recording_probe.FileInfoTrace(
+            open_attempted=True,
+            open_succeeded=True,
+            handle_present=True,
+            get_attempted=True,
+            get_page_index=0,
+            get_failure_type="ApiError",
+            get_response_code=400,
+            close_attempted=True,
+            close_succeeded=True,
+        )
         err = probe.DownloadPrepareError(
-            "DOWNLOAD_PREPARE_ERROR",
+            "FILE_INFO_GET_ERROR",
             failure_type="ApiError",
             response_code=400,
+            file_info_trace=trace,
         )
-        self.assertEqual(err.stage, "DOWNLOAD_PREPARE_ERROR")
+        self.assertEqual(err.stage, "FILE_INFO_GET_ERROR")
         self.assertEqual(err.failure_type, "ApiError")
         self.assertEqual(err.response_code, 400)
+        self.assertIs(err.file_info_trace, trace)
+
+    def test_file_info_trace_copies_to_secret_safe_state(self):
+        trace = recording_probe.FileInfoTrace(
+            open_attempted=True,
+            open_succeeded=True,
+            handle_present=True,
+            get_attempted=True,
+            get_page_index=0,
+            get_pages_succeeded=0,
+            get_failure_type="TimeoutError",
+            get_response_code=None,
+            close_attempted=True,
+            close_succeeded=False,
+            close_failure_type="ApiError",
+            close_response_code=400,
+        )
+        state = probe.DownloadPrepareState()
+        probe.apply_file_info_trace(state, trace)
+        self.assertTrue(state.file_info_open_succeeded)
+        self.assertTrue(state.file_info_handle_present)
+        self.assertEqual(state.file_info_get_page_index, 0)
+        self.assertEqual(state.file_info_get_failure_type, "TimeoutError")
+        self.assertTrue(state.file_info_close_attempted)
+        self.assertFalse(state.file_info_close_succeeded)
+        self.assertEqual(state.file_info_close_response_code, 400)
 
 
 if __name__ == "__main__":
