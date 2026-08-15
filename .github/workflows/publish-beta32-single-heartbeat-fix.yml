@@ -1,0 +1,111 @@
+name: Publish beta.32 single heartbeat fix
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta32-single-heartbeat-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Apply beta.32 source changes
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          beta21_path = Path("custom_components/reolink_battery/recording_download_probe_beta21.py")
+          beta21 = beta21_path.read_text()
+
+          old_start = '''        trace = self._stream_trace\n        first_future = protocol.arm_stream_probe(expected_msg_num, trace, self._observe_frame)\n        started_at = self._loop.time()\n        next_p2p_heartbeat_at = started_at\n        reason = ""\n        try:\n'''
+          new_start = '''        trace = self._stream_trace\n        first_future = protocol.arm_stream_probe(expected_msg_num, trace, self._observe_frame)\n        started_at = self._loop.time()\n        reason = ""\n        self._apply_p2p_heartbeat_trace(trace, snapshot_pre_cmd13=True)\n        try:\n'''
+          assert old_start in beta21, "beta31 beta21 start anchor not found"
+          beta21 = beta21.replace(old_start, new_start, 1)
+
+          old_loop = '''            while True:\n                now = self._loop.time()\n                if now >= next_p2p_heartbeat_at:\n                    trace.p2p_heartbeat_attempted = True\n                    if self._send_p2p_heartbeat():\n                        trace.p2p_heartbeat_count += 1\n                    next_p2p_heartbeat_at = now + beta20.P2P_HEARTBEAT_INTERVAL\n\n                if trace.expected_size_reached:\n'''
+          new_loop = '''            while True:\n                if trace.expected_size_reached:\n'''
+          assert old_loop in beta21, "beta31 beta21 local heartbeat loop anchor not found"
+          beta21 = beta21.replace(old_loop, new_loop, 1)
+
+          old_finally = '''            trace.remote_disconnect_observed = protocol.remote_disconnect_observed\n            trace.connection_lost_exception_present = protocol.connection_lost_exception_present\n            if not trace.termination_reason:\n'''
+          new_finally = '''            trace.remote_disconnect_observed = protocol.remote_disconnect_observed\n            trace.connection_lost_exception_present = protocol.connection_lost_exception_present\n            self._apply_p2p_heartbeat_trace(trace)\n            if not trace.termination_reason:\n'''
+          assert old_finally in beta21, "beta31 beta21 finally anchor not found"
+          beta21 = beta21.replace(old_finally, new_finally, 1)
+
+          beta21_path.write_text(beta21)
+
+          manifest_path = Path("custom_components/reolink_battery/manifest.json")
+          manifest = json.loads(manifest_path.read_text())
+          assert manifest["version"] == "0.1.2-beta.31", manifest["version"]
+          manifest["version"] = "0.1.2-beta.32"
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+          diagnostics_path = Path("custom_components/reolink_battery/diagnostics.py")
+          diagnostics = diagnostics_path.read_text()
+          assert '"milestone": "3B.6-continuous-p2p-heartbeat"' in diagnostics
+          diagnostics = diagnostics.replace(
+              '"milestone": "3B.6-continuous-p2p-heartbeat"',
+              '"milestone": "3B.6-single-heartbeat-corrected"',
+              1,
+          )
+          diagnostics_path.write_text(diagnostics)
+
+          test_path = Path("tests/test_recording_download_beta32.py")
+          test_path.write_text('''"""Regression guard for beta.32 single continuous P2P heartbeat."""\n\nfrom pathlib import Path\nimport unittest\n\n\nROOT = Path(__file__).parents[1]\nBETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"\nBETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"\n\n\ndef _function_slice(source: str, marker: str, next_marker: str) -> str:\n    start = source.index(marker)\n    end = source.index(next_marker, start)\n    return source[start:end]\n\n\nclass Beta32SingleHeartbeatTests(unittest.TestCase):\n    def test_beta21_download_loop_has_no_local_heartbeat_sender(self):\n        source = BETA21.read_text()\n        body = _function_slice(\n            source,\n            "    async def send_file_download_probe(",\n            "\\n\\ndef _build_cmd13_wire",\n        )\n        self.assertNotIn("next_p2p_heartbeat_at", body)\n        self.assertNotIn("self._send_p2p_heartbeat()", body)\n        self.assertIn(\n            "self._apply_p2p_heartbeat_trace(trace, snapshot_pre_cmd13=True)",\n            body,\n        )\n        self.assertIn("self._apply_p2p_heartbeat_trace(trace)", body)\n\n    def test_beta20_background_sender_starts_after_handoff(self):\n        source = BETA20.read_text()\n        self.assertIn("def _start_p2p_heartbeat_loop", source)\n        self.assertIn("self._record_p2p_heartbeat()", source)\n        self.assertIn("await self._stop_p2p_heartbeat_loop()", source)\n        self.assertNotIn("next_p2p_heartbeat_at = started_at", source)\n\n\nif __name__ == "__main__":\n    unittest.main()\n''')
+          PY
+
+      - name: Validate beta.32
+        run: |
+          python -m compileall -q custom_components/reolink_battery tests
+          python -m unittest tests.test_recording_download_beta32 -v
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("custom_components/reolink_battery/manifest.json").read_text())
+          assert manifest["version"] == "0.1.2-beta.32"
+          beta21 = Path("custom_components/reolink_battery/recording_download_probe_beta21.py").read_text()
+          start = beta21.index("    async def send_file_download_probe(")
+          end = beta21.index("\n\ndef _build_cmd13_wire", start)
+          body = beta21[start:end]
+          assert "next_p2p_heartbeat_at" not in body
+          assert "self._send_p2p_heartbeat()" not in body
+          assert "snapshot_pre_cmd13=True" in body
+          assert "self._apply_p2p_heartbeat_trace(trace)" in body
+          PY
+
+      - name: Commit beta.32 source
+        run: |
+          git config user.name "Dmxsir"
+          git config user.email "36658595+Dmxsir@users.noreply.github.com"
+          git add custom_components/reolink_battery/recording_download_probe_beta21.py \
+                  custom_components/reolink_battery/manifest.json \
+                  custom_components/reolink_battery/diagnostics.py \
+                  tests/test_recording_download_beta32.py
+          git commit -m "Fix beta.32 single continuous P2P heartbeat"
+          git push origin HEAD:feature/recording-worker-3b2
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag v0.1.2-beta.32
+          git push origin v0.1.2-beta.32
+          gh release create v0.1.2-beta.32 \
+            --prerelease \
+            --title "v0.1.2-beta.32" \
+            --notes "Milestone 3B.6 beta.32 corrects the beta.31 heartbeat inheritance bug. The full-high beta21 download override no longer runs its legacy cmd8-local C2D_HB sender. Exactly one background P2P heartbeat source starts immediately after the single-lease handoff, stays active through login, FileInfo, cmd13 and cmd8, and stops before close. beta21 now snapshots the connection-lifetime heartbeat telemetry immediately before cmd13 and again in its finally block, so pre-cmd13 count and handoff-start flags reflect the actual session. cmd13/cmd8 framing, full-high handle/mainStream request, atomic MP4 verification, queue, 60-second settle, worker retries and HA Media handoff are unchanged. No cmd9 is introduced."
