@@ -1,0 +1,53 @@
+name: Publish beta.26 queue resilience
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify beta.26 source
+        run: |
+          python -m compileall -q custom_components/reolink_battery
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("custom_components/reolink_battery/manifest.json").read_text())
+          assert manifest["version"] == "0.1.2-beta.26"
+
+          worker = Path("custom_components/reolink_battery/recording_worker.py").read_text()
+          assert "self._deferred_event_ids: set[str] = set()" in worker
+          assert "event.event_id not in self._deferred_event_ids" in worker
+          assert "self._defer_event(event)" in worker
+          assert "async_complete_event(event.event_id)" in worker
+          assert "RECORDING_SETTLE_SECONDS = 60.0" in worker
+          assert "MAX_ATTEMPTS_PER_TRIGGER = 3" in worker
+          PY
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v0.1.2-beta.26
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "v0.1.2-beta.26" \
+            --notes "Milestone 3B.5 queue resilience follow-up. A recording event that exhausts its bounded 3-attempt retry set is now deferred for the current config-entry runtime instead of blocking newer motion events at the head of the persistent queue. The failed event remains pending and is retried after an integration reload or Home Assistant restart. The worker immediately continues to the next non-deferred pending Android motion event in the same serialized worker. Camera-closed 60-second settling, 30/60-second closed retry waits, one per-camera lock, verified atomic MP4 persistence under Home Assistant Media, and the reolink_battery_recording_ready event handoff are unchanged."
