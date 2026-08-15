@@ -1,0 +1,183 @@
+name: Publish beta.38 periodic-only RX ACK
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta38-periodic-only-rx-ack.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/recording-worker-3b2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'reolink-aio==0.21.8' 'pycryptodomex==3.23.0'
+
+      - name: Patch beta.38 periodic-only RX ACK
+        shell: bash
+        run: |
+          set -euo pipefail
+          BETA21_BEFORE="$(sha256sum custom_components/reolink_battery/recording_download_probe_beta21.py | awk '{print $1}')"
+          WORKER_BEFORE="$(sha256sum custom_components/reolink_battery/recording_worker.py | awk '{print $1}')"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, got {count}")
+              return text.replace(old, new, 1)
+
+          root = Path('.')
+          beta20_path = root / 'custom_components/reolink_battery/recording_download_probe_beta20.py'
+          beta20 = beta20_path.read_text()
+
+          beta20 = replace_once(
+              beta20,
+              '    udp_ack_inclusive_highest_count: int = 0\n'
+              '    udp_current_missing_packet_count_at_disconnect: int = 0\n',
+              '    udp_ack_inclusive_highest_count: int = 0\n'
+              '    udp_current_missing_packet_count_at_disconnect: int = 0\n'
+              '    udp_periodic_only_ack_enabled: bool = False\n'
+              '    udp_immediate_ack_suppressed_count: int = 0\n',
+              'trace periodic-only fields',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '        self.udp_ack_inclusive_highest_count = 0\n'
+              '        self.udp_current_missing_packet_count_at_disconnect = 0\n',
+              '        self.udp_ack_inclusive_highest_count = 0\n'
+              '        self.udp_current_missing_packet_count_at_disconnect = 0\n'
+              '        self.udp_periodic_only_ack_enabled = True\n'
+              '        self.udp_immediate_ack_suppressed_count = 0\n',
+              'protocol periodic-only counters',
+          )
+
+          start = beta20.index('    def send_ack(self) -> None:\n')
+          end = beta20.index('    def parse_udp_connection(self, port: int) -> None:\n', start)
+          new_ack_methods = '''    def _send_ack_now(self) -> bool:\n        """Transmit one inclusive-highest RX ACK snapshot."""\n        if (\n            self._transport is None\n            or self.host_id is None\n            or self._recv_seq_id < 0\n        ):\n            return False\n\n        payload = bytearray()\n        highest: int | None = None\n        if self._seq_data:\n            highest = max(self._seq_data)\n            for seq_id in range(self._recv_seq_id + 1, highest + 1):\n                payload.append(1 if seq_id in self._seq_data else 0)\n\n        host_id_bytes = self.host_id.to_bytes(4, byteorder="little")\n        seq_id_bytes = self._recv_seq_id.to_bytes(4, byteorder="little")\n        payload_len_bytes = len(payload).to_bytes(4, byteorder="little")\n        udp_header = (\n            bytes.fromhex(MAGIC_UDP_ACK)\n            + host_id_bytes\n            + bytes.fromhex("0000000000000000")\n            + seq_id_bytes\n            + bytes.fromhex("00000000")\n            + payload_len_bytes\n        )\n        self._transport.sendto(\n            udp_header + bytes(payload), (self._host, self.remote_port)\n        )\n\n        self.udp_ack_sent_count += 1\n        if 0 in payload:\n            self.udp_ack_with_gap_bitmap_count += 1\n        if highest is not None:\n            self.udp_ack_inclusive_highest_count += 1\n        return True\n\n    def send_ack(self) -> None:\n        """Coalesce per-packet ACK requests into the 10 ms periodic sender."""\n        if self._recv_seq_id >= 0:\n            self.udp_immediate_ack_suppressed_count += 1\n\n    def send_periodic_ack(self) -> bool:\n        """Send the current receive ACK state at the official-client cadence."""\n        will_send = (\n            self._transport is not None\n            and self.host_id is not None\n            and self._recv_seq_id >= 0\n        )\n        if not will_send:\n            return False\n        gap_active = bool(self._seq_data)\n        if not self._send_ack_now():\n            return False\n        self.udp_periodic_ack_count += 1\n        if gap_active:\n            self.udp_periodic_ack_gap_count += 1\n        return True\n\n'''
+          beta20 = beta20[:start] + new_ack_methods + beta20[end:]
+
+          beta20 = replace_once(
+              beta20,
+              '            trace.udp_current_missing_packet_count_at_disconnect = (\n'
+              '                snapshot_protocol.udp_current_missing_packet_count_at_disconnect\n'
+              '            )\n\n'
+              '    def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:\n',
+              '            trace.udp_current_missing_packet_count_at_disconnect = (\n'
+              '                snapshot_protocol.udp_current_missing_packet_count_at_disconnect\n'
+              '            )\n'
+              '            trace.udp_periodic_only_ack_enabled = (\n'
+              '                snapshot_protocol.udp_periodic_only_ack_enabled\n'
+              '            )\n'
+              '            trace.udp_immediate_ack_suppressed_count = (\n'
+              '                snapshot_protocol.udp_immediate_ack_suppressed_count\n'
+              '            )\n\n'
+              '    def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:\n',
+              'snapshot periodic-only fields',
+          )
+          beta20_path.write_text(beta20)
+
+          diagnostics_path = root / 'custom_components/reolink_battery/diagnostics.py'
+          diagnostics = diagnostics_path.read_text()
+          diagnostics = replace_once(
+              diagnostics,
+              '                "udp_current_missing_packet_count_at_disconnect": (\n'
+              '                    stream.udp_current_missing_packet_count_at_disconnect\n'
+              '                ),\n'
+              '                "remote_disconnect_observed": stream.remote_disconnect_observed,\n',
+              '                "udp_current_missing_packet_count_at_disconnect": (\n'
+              '                    stream.udp_current_missing_packet_count_at_disconnect\n'
+              '                ),\n'
+              '                "udp_periodic_only_ack_enabled": (\n'
+              '                    stream.udp_periodic_only_ack_enabled\n'
+              '                ),\n'
+              '                "udp_immediate_ack_suppressed_count": (\n'
+              '                    stream.udp_immediate_ack_suppressed_count\n'
+              '                ),\n'
+              '                "remote_disconnect_observed": stream.remote_disconnect_observed,\n',
+              'diagnostic periodic-only fields',
+          )
+          diagnostics = replace_once(
+              diagnostics,
+              '        "milestone": "3B.11-inclusive-rx-ack-bitmap",\n',
+              '        "milestone": "3B.12-periodic-only-rx-ack",\n',
+              'milestone',
+          )
+          diagnostics_path.write_text(diagnostics)
+
+          manifest_path = root / 'custom_components/reolink_battery/manifest.json'
+          manifest = manifest_path.read_text()
+          manifest = replace_once(
+              manifest,
+              '"version": "0.1.2-beta.37"',
+              '"version": "0.1.2-beta.38"',
+              'manifest version',
+          )
+          manifest_path.write_text(manifest)
+
+          test_path = root / 'tests/test_recording_download_beta38.py'
+          test_path.write_text('''"""Regression guards for beta.38 periodic-only receive ACK sending."""\n\nfrom pathlib import Path\nimport unittest\n\nROOT = Path(__file__).parents[1]\nBETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"\nBETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"\nWORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"\nDIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"\nMANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"\n\n\nclass Beta38PeriodicOnlyRxAckTests(unittest.TestCase):\n    def test_periodic_task_is_only_wire_ack_sender(self):\n        source = BETA20.read_text()\n        self.assertIn("def _send_ack_now(self) -> bool:", source)\n        self.assertIn("def send_ack(self) -> None:", source)\n        self.assertIn("self.udp_immediate_ack_suppressed_count += 1", source)\n        self.assertIn("if not self._send_ack_now():", source)\n        self.assertIn("PERIODIC_RX_ACK_INTERVAL = 0.010", source)\n\n    def test_inclusive_highest_bitmap_is_preserved(self):\n        source = BETA20.read_text()\n        self.assertIn("range(self._recv_seq_id + 1, highest + 1)", source)\n        self.assertIn("bytes.fromhex(MAGIC_UDP_ACK)", source)\n        self.assertIn("udp_ack_inclusive_highest_count", source)\n\n    def test_existing_transport_contract_is_unchanged(self):\n        source = BETA20.read_text()\n        self.assertIn("P2P_HEARTBEAT_INTERVAL = 1.0", source)\n        self.assertIn("RELIABLE_UDP_ACK_TIMEOUT = 0.5", source)\n        self.assertIn("RELIABLE_UDP_MAX_RETRANSMITS = 2", source)\n        beta21 = BETA21.read_text()\n        self.assertEqual(beta21.count("_send_reliable_download_packet("), 2)\n        self.assertIn("protocol=protocol", beta21)\n        worker = WORKER.read_text()\n        self.assertIn("RECORDING_SETTLE_SECONDS = 60.0", worker)\n\n    def test_diagnostics_and_version(self):\n        diagnostics = DIAGNOSTICS.read_text()\n        for token in (\n            "udp_periodic_only_ack_enabled",\n            "udp_immediate_ack_suppressed_count",\n            "3B.12-periodic-only-rx-ack",\n        ):\n            self.assertIn(token, diagnostics)\n        self.assertIn('"version": "0.1.2-beta.38"', MANIFEST.read_text())\n\n\nif __name__ == "__main__":\n    unittest.main()\n''')
+          PY
+
+          test "$BETA21_BEFORE" = "$(sha256sum custom_components/reolink_battery/recording_download_probe_beta21.py | awk '{print $1}')"
+          test "$WORKER_BEFORE" = "$(sha256sum custom_components/reolink_battery/recording_worker.py | awk '{print $1}')"
+
+      - name: Verify beta.38 source
+        run: |
+          set -euo pipefail
+          grep -q '"version": "0.1.2-beta.38"' custom_components/reolink_battery/manifest.json
+          grep -q '3B.12-periodic-only-rx-ack' custom_components/reolink_battery/diagnostics.py
+          grep -q 'udp_periodic_only_ack_enabled' custom_components/reolink_battery/recording_download_probe_beta20.py
+          python -m compileall -q custom_components/reolink_battery
+          python tests/test_recording_download_beta38.py
+          python tests/test_recording_download_beta37.py
+          python tests/test_recording_download_beta35.py
+          python tests/test_recording_download_beta34.py
+          python tests/test_recording_download_beta32.py
+          python tests/test_recording_download_beta20.py
+          python tests/test_recording_download_probe.py
+          git diff --check
+
+      - name: Commit beta.38 source
+        id: source
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add custom_components/reolink_battery/recording_download_probe_beta20.py custom_components/reolink_battery/diagnostics.py custom_components/reolink_battery/manifest.json tests/test_recording_download_beta38.py
+          git commit -m 'Align beta.38 receive ACK cadence with Neolink'
+          git push origin HEAD:feature/recording-worker-3b2
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish beta.38 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git tag v0.1.2-beta.38 "$SOURCE_SHA"
+          git push origin v0.1.2-beta.38
+          gh release create v0.1.2-beta.38 \
+            --repo Dmxsir/ha-reolink-battery \
+            --target "$SOURCE_SHA" \
+            --prerelease \
+            --title 'v0.1.2-beta.38' \
+            --notes 'Milestone 3B.12 isolates receive ACK cadence after beta.37 proved that the camera can send D2C_DISC while the receive sequence is fully contiguous with zero current missing packets. The inclusive-highest ACK bitmap from beta.37 is preserved. Receive ACK state is still updated by every incoming UDP packet, but per-packet wire ACK sends are now coalesced: the dedicated 10 ms periodic task is the only RX ACK transmitter, matching Neolink UDP architecture and avoiding the roughly doubled ACK rate observed in beta.37. Single-lease handoff, the sole 1-second C2D_HB sender, cmd13/cmd8 same-sequence outbound retransmission, handle-bound full-high/mainStream download, worker retries, exact MP4 verification and Media/Telegram handoff are unchanged. Diagnostics expose periodic-only mode and the number of immediate ACK requests suppressed. No cmd234 or cmd9 is introduced.'
