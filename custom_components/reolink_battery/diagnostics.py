@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
 from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
-from .recording_download_probe_beta19 import stream_probe_state
+from .recording_download_probe_beta20 import stream_probe_state
 from .recording_probe import probe_state
 
 
@@ -218,6 +218,12 @@ async def async_get_config_entry_diagnostics(
                 "keepalive_attempted": stream.keepalive_attempted,
                 "keepalive_count": stream.keepalive_count,
                 "keepalive_interval_seconds": stream.keepalive_interval_seconds,
+                "p2p_heartbeat_attempted": stream.p2p_heartbeat_attempted,
+                "p2p_heartbeat_count": stream.p2p_heartbeat_count,
+                "p2p_heartbeat_interval_seconds": stream.p2p_heartbeat_interval_seconds,
+                "proactive_cmd234_count": stream.proactive_cmd234_count,
+                "remote_disconnect_observed": stream.remote_disconnect_observed,
+                "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
                 "decoded_cmd8_bytes": stream.decoded_cmd8_bytes,
                 "raw_cmd8_chunks": stream.raw_cmd8_chunks,
@@ -258,7 +264,7 @@ async def async_get_config_entry_diagnostics(
             "full_media_download_attempted": False,
             "cmd8_attempted": stream.cmd8_attempted,
         },
-        "milestone": "3B.2b-cmd8-keepalive-full-transfer-probe",
+        "milestone": "3B.2b-cmd8-p2p-heartbeat-full-transfer-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
