@@ -1,4 +1,4 @@
-"""Offline tests for Milestone 3B.2b cmd13 preparation helpers."""
+"""Offline tests for Milestone 3B.2b native cmd13 frame probe."""
 
 from __future__ import annotations
 
@@ -18,10 +18,18 @@ sys.modules[PACKAGE] = package
 probe = importlib.import_module(f"{PACKAGE}.recording_download_probe")
 
 
-class DownloadPrepareHelperTests(unittest.TestCase):
-    def test_download_header_reuses_validated_file_info_channel(self):
-        self.assertEqual(probe.DOWNLOAD_HEADER_CHANNEL_ID, 7)
+class _FakeBaichuan:
+    def __init__(self, mess_id: int = 10) -> None:
+        self._mess_id = mess_id
 
+    @staticmethod
+    def _aes_encrypt(data: bytes) -> bytes:
+        # Identity transform lets the unit test inspect framing lengths only.
+        # Real reolink-aio AES-CFB preserves the same byte length.
+        return data
+
+
+class DownloadPrepareHelperTests(unittest.TestCase):
     def test_download_xml_contains_required_identity(self):
         xml = probe._download_xml("ABC123", "/mnt/sda/a&b/test<1>.mp4")
         self.assertIn("<channelId>0</channelId>", xml)
@@ -35,27 +43,51 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         self.assertIn("<binaryData>1</binaryData>", xml)
         self.assertIn("<channelId>0</channelId>", xml)
 
-    def test_prepare_response_extracts_handle_size_and_name(self):
-        response = """<?xml version=\"1.0\"?><body><FileInfoList><FileInfo><handle>7</handle><fileName>x.mp4</fileName><fileSize>123456</fileSize></FileInfo></FileInfoList></body>"""
-        present, handle, size, name = probe._parse_prepare_response(response)
-        self.assertTrue(present)
-        self.assertTrue(handle)
-        self.assertEqual(size, 123456)
-        self.assertTrue(name)
-
-    def test_empty_prepare_response_is_safe(self):
-        self.assertEqual(
-            probe._parse_prepare_response(""),
-            (False, False, None, False),
+    def test_cmd13_wire_uses_file_download_header(self):
+        baichuan = _FakeBaichuan(10)
+        wire, meta = probe._build_cmd13_wire(
+            baichuan, "ABC123", "/mnt/sda/recording.mp4"
         )
 
-    def test_zero_size_is_not_treated_as_authoritative(self):
-        response = """<?xml version=\"1.0\"?><body><FileInfo><size>0</size></FileInfo></body>"""
-        present, handle, size, name = probe._parse_prepare_response(response)
-        self.assertTrue(present)
-        self.assertFalse(handle)
-        self.assertIsNone(size)
-        self.assertFalse(name)
+        self.assertEqual(wire[0:4], bytes.fromhex("f0debc0a"))
+        self.assertEqual(int.from_bytes(wire[4:8], "little"), 13)
+        self.assertEqual(int.from_bytes(wire[8:12], "little"), meta.body_length)
+        self.assertEqual(wire[12], 1)
+        self.assertEqual(wire[13], 0)
+        self.assertEqual(int.from_bytes(wire[14:16], "little"), 11)
+        self.assertEqual(int.from_bytes(wire[16:18], "little"), 0)
+        self.assertEqual(int.from_bytes(wire[18:20], "little"), 0x6482)
+        self.assertEqual(int.from_bytes(wire[20:24], "little"), meta.payload_offset)
+        self.assertEqual(len(wire), 24 + meta.body_length)
+        self.assertEqual(meta.channel_id, 1)
+        self.assertEqual(meta.stream_type, 0)
+        self.assertEqual(meta.msg_num, 11)
+        self.assertEqual(meta.message_class, 0x6482)
+        self.assertEqual(baichuan._mess_id, 11)
+
+    def test_payload_offset_is_binary_extension_length(self):
+        baichuan = _FakeBaichuan()
+        _, meta = probe._build_cmd13_wire(
+            baichuan, "ABC123", "/mnt/sda/recording.mp4"
+        )
+        self.assertEqual(
+            meta.payload_offset,
+            len(probe._binary_extension_xml().encode("utf-8")),
+        )
+
+    def test_message_number_wraps_without_zero(self):
+        baichuan = _FakeBaichuan(0xFFFF)
+        _, meta = probe._build_cmd13_wire(
+            baichuan, "ABC123", "/mnt/sda/recording.mp4"
+        )
+        self.assertEqual(meta.msg_num, 1)
+        self.assertEqual(baichuan._mess_id, 1)
+
+    def test_known_prepare_response_codes_are_explicit(self):
+        self.assertEqual(
+            probe.ACCEPTED_PREPARE_RESPONSE_CODES,
+            frozenset({0, 200, 201, 300}),
+        )
 
     def test_prepare_error_keeps_only_safe_protocol_metadata(self):
         err = probe.DownloadPrepareError(
