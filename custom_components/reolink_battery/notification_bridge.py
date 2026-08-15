@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import Event, HomeAssistant, State, callback
@@ -55,9 +55,6 @@ def notification_event_from_attributes(
             return None
         device_name = expected_device_name
     else:
-        # Fallback for a future/localized template: package is mandatory, and
-        # accept only when another Reolink alarm signal is present and the
-        # configured camera name is visible in the notification text.
         channel = _text(attributes.get("channel_id"))
         looks_like_alarm = (
             _normalized(title) == "camera alert"
@@ -130,9 +127,17 @@ class NotificationBridge:
         self.last_event_queued = False
         self.last_duplicate_rejected = False
 
-        # The queue is persistent while these fields are runtime telemetry.
-        # Restore the latest still-pending Android event on integration reload so
-        # diagnostics do not misleadingly return to an all-null state.
+        # beta29 secret-safe telemetry. These fields do not affect queue identity
+        # or behavior; they only show whether HA actually delivered a fresh
+        # Last Notification state-change and whether its Android post_time moved.
+        self.state_change_count = 0
+        self.reolink_match_count = 0
+        self.last_state_change_time: datetime | None = None
+        self.last_observed_post_time: datetime | None = None
+        self.previous_observed_post_time: datetime | None = None
+        self.last_post_time_changed: bool | None = None
+        self.last_event_id_fingerprint = ""
+
         if initial_event is not None and initial_event.source == "android_notification":
             self.last_reolink_notification_time = (
                 initial_event.notification_post_time or initial_event.alarm_time
@@ -168,6 +173,13 @@ class NotificationBridge:
         new_state: State | None = event.data.get("new_state")
         if new_state is None:
             return
+        self.state_change_count += 1
+        event_time = getattr(event, "time_fired", None)
+        self.last_state_change_time = (
+            event_time.astimezone(UTC)
+            if isinstance(event_time, datetime) and event_time.tzinfo is not None
+            else datetime.now(UTC)
+        )
         self._hass.async_create_task(
             self.async_process_attributes(new_state.attributes),
             "reolink_battery notification event",
@@ -181,9 +193,21 @@ class NotificationBridge:
             uid=self._uid,
         )
         if event is None:
-            # Last Notification is a phone-wide sensor. Unrelated app updates
-            # must not erase the last successfully matched Reolink telemetry.
             return False
+
+        self.reolink_match_count += 1
+        observed_post_time = event.notification_post_time or event.alarm_time
+        self.previous_observed_post_time = self.last_observed_post_time
+        self.last_post_time_changed = (
+            None
+            if self.last_observed_post_time is None
+            else observed_post_time != self.last_observed_post_time
+        )
+        self.last_observed_post_time = observed_post_time
+        # Only a short one-way hash fingerprint is exposed in diagnostics.
+        self.last_event_id_fingerprint = hashlib.sha256(
+            event.event_id.encode("utf-8")
+        ).hexdigest()[:12]
 
         self.last_event_matched = True
         self.last_camera_mapped = True
