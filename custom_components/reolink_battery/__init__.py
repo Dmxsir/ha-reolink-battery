@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, UnitOfInformation
@@ -42,7 +43,9 @@ from .device_status import (
     local_state_as_dict,
     local_state_from_dict,
 )
-from .notification_bridge import NotificationBridge
+
+if TYPE_CHECKING:
+    from .notification_bridge import NotificationBridge
 
 PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON)
 STORAGE_SENSOR_KEYS = ("storage_total", "storage_used", "storage_free")
@@ -118,6 +121,7 @@ async def async_setup_entry(
 
     notification_entity = entry.options.get(CONF_NOTIFICATION_ENTITY)
     if isinstance(notification_entity, str) and notification_entity:
+        from .notification_bridge import NotificationBridge
 
         async def ingest_notification(event) -> int:
             return await coordinator.async_ingest_events([event])
