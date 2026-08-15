@@ -147,28 +147,33 @@ async def async_get_config_entry_diagnostics(
             },
             "routing_layout": ROUTING_LAYOUT,
             "request_header_channel_id": prepare.request_header_channel_id,
-            "request_message_id": prepare.request_message_id,
-            "request_full_message_id": prepare.request_full_message_id,
+            "request_stream_type": prepare.request_stream_type,
+            "request_msg_num": prepare.request_msg_num,
             "request_message_class": _hex_class(prepare.request_message_class),
             "request_body_length": prepare.request_body_length,
             "request_payload_offset": prepare.request_payload_offset,
             "response_message_class": _hex_class(prepare.response_message_class),
             "response_header_channel_id": prepare.response_header_channel_id,
-            "response_message_id": prepare.response_message_id,
-            "response_full_message_id": prepare.response_full_message_id,
+            "response_stream_type": prepare.response_stream_type,
+            "response_msg_num": prepare.response_msg_num,
             "response_body_length": prepare.response_body_length,
             "response_payload_offset": prepare.response_payload_offset,
             "routing_echo_match": (
                 prepare.response_present
-                and prepare.request_full_message_id is not None
-                and prepare.request_full_message_id == prepare.response_full_message_id
+                and prepare.request_header_channel_id is not None
+                and prepare.request_stream_type is not None
+                and prepare.request_msg_num is not None
+                and prepare.request_header_channel_id
+                == prepare.response_header_channel_id
+                and prepare.request_stream_type == prepare.response_stream_type
+                and prepare.request_msg_num == prepare.response_msg_num
             ),
             "first_payload_length": prepare.first_payload_length,
             "media_payload_observed": prepare.first_payload_length > 0,
             "full_media_download_attempted": False,
             "cmd8_attempted": False,
         },
-        "milestone": "3B.2b-fileinfo-diagnostics",
+        "milestone": "3B.2b-sdk-routing-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
