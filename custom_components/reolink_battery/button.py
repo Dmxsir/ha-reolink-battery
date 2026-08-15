@@ -22,11 +22,13 @@ from .const import (
     CONF_UID,
     DOMAIN,
 )
-from .recording_download_probe_beta16 import (
+from .recording_download_probe_beta17 import (
     apply_file_info_trace,
     apply_identity_trace,
+    apply_stream_probe_trace,
     async_prepare_download_for_event,
     download_prepare_state,
+    reset_stream_probe_state,
 )
 from .recording_probe import async_find_recording_for_event, probe_state
 
@@ -156,7 +158,7 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Probe cmd13 with the exact FileInfo identity, without cmd8."""
+    """Probe the accepted cmd13 and sample its same-session continuation."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -180,7 +182,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Find the queued recording, issue one exact-identity cmd13, then close."""
+        """Find the queued recording, issue cmd13, sample continuation, then close."""
         event = next(
             (
                 item
@@ -192,6 +194,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         if event is None:
             raise HomeAssistantError("NO_PENDING_NOTIFICATION_EVENT")
 
+        reset_stream_probe_state(self._entry.entry_id)
         state = download_prepare_state(self._entry.entry_id)
         state.attempted = True
         state.success = False
@@ -267,6 +270,9 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
                     self.hass.config.time_zone,
                 )
         except CameraStageError as err:
+            apply_stream_probe_trace(
+                self._entry.entry_id, getattr(err, "stream_trace", None)
+            )
             state.failure_stage = err.stage
             state.failure_type = getattr(err, "failure_type", "")
             response_code = getattr(err, "response_code", None)
@@ -274,6 +280,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
             apply_file_info_trace(state, getattr(err, "file_info_trace", None))
             raise HomeAssistantError(err.stage) from None
 
+        apply_stream_probe_trace(self._entry.entry_id, result.stream_trace)
         apply_file_info_trace(state, result.file_info_trace)
         apply_identity_trace(state, result.identity_trace)
         state.candidate_start = result.candidate_start
