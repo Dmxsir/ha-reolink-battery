@@ -22,7 +22,7 @@ from .const import (
     CONF_UID,
     DOMAIN,
 )
-from .recording_download_probe import (
+from .recording_download_probe_beta14 import (
     apply_file_info_trace,
     apply_identity_trace,
     async_prepare_download_for_event,
