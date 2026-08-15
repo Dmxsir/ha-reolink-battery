@@ -1,0 +1,169 @@
+name: Publish beta23 automatic worker
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta23-auto-worker.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Wire persistent completion API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('custom_components/reolink_battery/coordinator.py')
+          text = p.read_text()
+          needle = '''        return len(accepted)\n\n    async def async_poll(self) -> int:\n'''
+          replacement = '''        return len(accepted)\n\n    async def async_complete_event(self, event_id: str) -> bool:\n        \"\"\"Remove one pending item only after a verified recording is durable.\"\"\"\n        before = len(self._queue.pending)\n        self._queue.remove(event_id)\n        changed = len(self._queue.pending) != before\n        if changed:\n            await self._store.async_save(self._queue.as_storage())\n        return changed\n\n    async def async_poll(self) -> int:\n'''
+          if needle not in text:
+              raise SystemExit('coordinator insertion point not found')
+          p.write_text(text.replace(needle, replacement, 1))
+          PY
+
+      - name: Wire automatic worker lifecycle
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('custom_components/reolink_battery/__init__.py')
+          text = p.read_text()
+          text = text.replace(
+              'if TYPE_CHECKING:\n    from .notification_bridge import NotificationBridge\n',
+              'if TYPE_CHECKING:\n    from .notification_bridge import NotificationBridge\n    from .recording_worker import RecordingWorker\n'
+          )
+          text = text.replace(
+              '    notification_bridge: NotificationBridge | None = None\n',
+              '    notification_bridge: NotificationBridge | None = None\n    recording_worker: RecordingWorker | None = None\n'
+          )
+          needle = '''    if isinstance(notification_entity, str) and notification_entity:\n        from .notification_bridge import NotificationBridge\n\n        async def ingest_notification(event) -> int:\n            return await coordinator.async_ingest_events([event])\n'''
+          replacement = '''    if isinstance(notification_entity, str) and notification_entity:\n        from .notification_bridge import NotificationBridge\n        from .recording_worker import RecordingWorker\n\n        runtime.recording_worker = RecordingWorker(hass, entry)\n\n        async def ingest_notification(event) -> int:\n            added = await coordinator.async_ingest_events([event])\n            if added and runtime.recording_worker is not None:\n                runtime.recording_worker.notify()\n            return added\n'''
+          if needle not in text:
+              raise SystemExit('notification worker insertion point not found')
+          text = text.replace(needle, replacement, 1)
+
+          needle = '''    entry.async_create_background_task(\n        hass, coordinator.async_run(), "reolink_battery cloud event polling"\n    )\n    return True\n'''
+          replacement = '''    entry.async_create_background_task(\n        hass, coordinator.async_run(), "reolink_battery cloud event polling"\n    )\n    if runtime.recording_worker is not None:\n        entry.async_create_background_task(\n            hass,\n            runtime.recording_worker.async_run(),\n            "reolink_battery verified recording worker",\n        )\n        if any(\n            event.source == "android_notification"\n            for event in coordinator.pending_events\n        ):\n            runtime.recording_worker.notify()\n    return True\n'''
+          if needle not in text:
+              raise SystemExit('worker task insertion point not found')
+          text = text.replace(needle, replacement, 1)
+
+          needle = '''    if entry.runtime_data.notification_bridge is not None:\n        entry.runtime_data.notification_bridge.stop()\n    await entry.runtime_data.coordinator.async_shutdown()\n'''
+          replacement = '''    if entry.runtime_data.notification_bridge is not None:\n        entry.runtime_data.notification_bridge.stop()\n    if entry.runtime_data.recording_worker is not None:\n        await entry.runtime_data.recording_worker.async_shutdown()\n    await entry.runtime_data.coordinator.async_shutdown()\n'''
+          if needle not in text:
+              raise SystemExit('worker shutdown insertion point not found')
+          p.write_text(text.replace(needle, replacement, 1))
+          PY
+
+      - name: Wire worker diagnostics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('custom_components/reolink_battery/diagnostics.py')
+          text = p.read_text()
+          text = text.replace(
+              '    stream = stream_probe_state(entry.entry_id)\n',
+              '    stream = stream_probe_state(entry.entry_id)\n    worker = entry.runtime_data.recording_worker\n'
+          )
+          needle = '''        "milestone": "3B.2b-verified-atomic-mp4",\n        "camera_worker_enabled": False,\n        "automatic_recording_processing_enabled": False,\n'''
+          replacement = '''        "recording_worker": {\n            "configured": worker is not None,\n            "enabled": bool(worker and worker.state.enabled),\n            "running": bool(worker and worker.state.running),\n            "pending_trigger": bool(worker and worker.state.pending_trigger),\n            "waiting_camera_closed": bool(worker and worker.state.waiting_camera_closed),\n            "settle_seconds": worker.state.settle_seconds if worker else None,\n            "attempts": worker.state.attempts if worker else 0,\n            "retries": worker.state.retries if worker else 0,\n            "completed": worker.state.completed if worker else 0,\n            "last_event_time": (\n                worker.state.last_event_time.isoformat()\n                if worker and worker.state.last_event_time else None\n            ),\n            "last_attempt_time": (\n                worker.state.last_attempt_time.isoformat()\n                if worker and worker.state.last_attempt_time else None\n            ),\n            "last_completed_time": (\n                worker.state.last_completed_time.isoformat()\n                if worker and worker.state.last_completed_time else None\n            ),\n            "last_failure_stage": (worker.state.last_failure_stage or None) if worker else None,\n            "last_failure_type": (worker.state.last_failure_type or None) if worker else None,\n            "last_file_saved": bool(worker and worker.state.last_file_saved),\n            "last_file_size": worker.state.last_file_size if worker else 0,\n            "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),\n            "raw_path_exposed": False,\n        },\n        "milestone": "3B.3-automatic-verified-recording-worker",\n        "camera_worker_enabled": worker is not None,\n        "automatic_recording_processing_enabled": worker is not None,\n'''
+          if needle not in text:
+              raise SystemExit('diagnostics worker insertion point not found')
+          p.write_text(text.replace(needle, replacement, 1))
+          PY
+
+      - name: Bump manifest
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('custom_components/reolink_battery/manifest.json')
+          data = json.loads(p.read_text())
+          data['version'] = '0.1.2-beta.23'
+          p.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+      - name: Install protocol dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe tests.test_recording_download_beta12
+
+      - name: Validate JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path('custom_components/reolink_battery').rglob('*.json'):
+              json.loads(path.read_text())
+          PY
+
+      - name: Static worker invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          worker = Path('custom_components/reolink_battery/recording_worker.py').read_text()
+          coord = Path('custom_components/reolink_battery/coordinator.py').read_text()
+          init = Path('custom_components/reolink_battery/__init__.py').read_text()
+          diag = Path('custom_components/reolink_battery/diagnostics.py').read_text()
+          required = [
+              'RECORDING_SETTLE_SECONDS = 60.0',
+              'async with self._entry.runtime_data.local_operation_lock',
+              'trace, "file_saved"',
+              'async_complete_event(event.event_id)',
+              'RECORDING_READY_EVENT',
+              'await self._wait_camera_closed(delay)',
+          ]
+          missing = [item for item in required if item not in worker]
+          if missing:
+              raise SystemExit(f'missing worker invariants: {missing}')
+          if 'async def async_complete_event' not in coord:
+              raise SystemExit('missing persistent completion API')
+          if 'runtime.recording_worker.notify()' not in init:
+              raise SystemExit('notification enqueue does not trigger worker')
+          if 'automatic_recording_processing_enabled": worker is not None' not in diag:
+              raise SystemExit('worker diagnostics not enabled')
+          PY
+
+      - name: Commit beta23 wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/coordinator.py \
+                  custom_components/reolink_battery/__init__.py \
+                  custom_components/reolink_battery/diagnostics.py \
+                  custom_components/reolink_battery/manifest.json
+          git diff --cached --quiet || git commit -m "Wire automatic verified recording worker"
+          git push origin HEAD:feature/recording-worker-3b2
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f v0.1.2-beta.23
+          git push -f origin v0.1.2-beta.23
+          gh release delete v0.1.2-beta.23 --yes >/dev/null 2>&1 || true
+          gh release create v0.1.2-beta.23 \
+            --title "Reolink Battery v0.1.2-beta.23" \
+            --prerelease \
+            --target "$(git rev-parse HEAD)" \
+            --notes "Milestone 3B.3 automatic verified recording worker. A newly queued Android notification signals one per-entry worker; the worker waits 60 seconds from notification time with the camera completely closed, then uses the physically validated beta.22 cmd13 -> returned handle -> cmd8 full-high/mainStream path under the existing per-camera lock. It retries only in bounded closed-session attempts. The persistent pending event is removed only after the MP4 is atomically finalized and re-verified on disk, then Home Assistant fires reolink_battery_recording_ready with the internal file path for later automation/Telegram wiring. Existing pending Android events trigger once on startup. No permanent polling, RTSP/ONVIF/preview, Telegram send, or queue removal on failure." 
