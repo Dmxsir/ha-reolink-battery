@@ -1,0 +1,41 @@
+name: Publish 3B.2b identity beta9
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-3b2b-identity-beta9.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install protocol dependencies
+        run: python -m pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe -v
+      - name: Validate JSON
+        run: python -m json.tool custom_components/reolink_battery/manifest.json >/dev/null && python -m json.tool custom_components/reolink_battery/strings.json >/dev/null && python -m json.tool custom_components/reolink_battery/translations/en.json >/dev/null && python -m json.tool custom_components/reolink_battery/translations/he.json >/dev/null
+      - name: Publish prerelease if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.1.2-beta.9 >/dev/null 2>&1; then
+            echo "Release already exists"
+            exit 0
+          fi
+          gh release create v0.1.2-beta.9 \
+            --target "${GITHUB_SHA}" \
+            --prerelease \
+            --title "Reolink Battery v0.1.2-beta.9" \
+            --notes "Milestone 3B.2b exact FileInfo identity probe. Keeps the beta.8 cmd13 0x6482 framing and channelId=7/streamType=0/msgNum16 routing unchanged. FileInfoList parsing now preserves the camera-returned Id, fileName and name as distinct fields and cmd13 reuses those exact values when present instead of collapsing/fabricating them. Diagnostics expose only presence, lengths, equality/path flags and non-identifying type/channel metadata; raw filenames/identities remain hidden. No cmd8 full media download, automatic worker, queue removal, or Telegram."
