@@ -83,6 +83,30 @@ async def async_get_config_entry_diagnostics(
             "last_camera_mapped": bool(bridge and bridge.last_camera_mapped),
             "last_event_queued": bool(bridge and bridge.last_event_queued),
             "duplicate_rejected": bool(bridge and bridge.last_duplicate_rejected),
+            "sensor_state_change_count": bridge.sensor_state_change_count if bridge else 0,
+            "matched_notification_update_count": (
+                bridge.matched_notification_update_count if bridge else 0
+            ),
+            "last_sensor_state_change_time": (
+                bridge.last_sensor_state_change_time.isoformat()
+                if bridge and bridge.last_sensor_state_change_time
+                else None
+            ),
+            "last_notification_post_time_ms": (
+                bridge.last_notification_post_time_ms if bridge else None
+            ),
+            "last_post_time_changed": (
+                bridge.last_post_time_changed if bridge else None
+            ),
+            "last_event_fingerprint": (
+                bridge.last_event_fingerprint if bridge else ""
+            ),
+            "last_processing_lag_seconds": (
+                bridge.last_processing_lag_seconds if bridge else None
+            ),
+            "telemetry_restored_from_pending": bool(
+                bridge and bridge.telemetry_restored_from_pending
+            ),
         },
         "recording_probe": {
             "manual_only": True,
@@ -313,7 +337,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.5-event-only-media-handoff",
+        "milestone": "3B.5-notification-telemetry",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

@@ -221,6 +221,65 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listener.last_reolink_notification_time, saved_time)
         self.assertEqual(listener.last_reolink_notification_camera, "atv")
 
+    async def test_beta29_tracks_sensor_updates_and_post_time_changes(self):
+        queue = events.EventQueue()
+
+        async def ingest(event):
+            return 1 if queue.enqueue(event) else 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(), "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        self.assertTrue(await listener.async_process_attributes(REAL_NOTIFICATION))
+        first_fingerprint = listener.last_event_fingerprint
+        self.assertEqual(listener.sensor_state_change_count, 1)
+        self.assertEqual(listener.matched_notification_update_count, 1)
+        self.assertTrue(listener.last_post_time_changed)
+        self.assertEqual(listener.last_notification_post_time_ms, 1786709128188)
+        self.assertTrue(first_fingerprint)
+        self.assertIsNotNone(listener.last_sensor_state_change_time)
+        self.assertIsNotNone(listener.last_processing_lag_seconds)
+
+        self.assertFalse(await listener.async_process_attributes(REAL_NOTIFICATION))
+        self.assertEqual(listener.sensor_state_change_count, 2)
+        self.assertEqual(listener.matched_notification_update_count, 2)
+        self.assertFalse(listener.last_post_time_changed)
+        self.assertEqual(listener.last_event_fingerprint, first_fingerprint)
+        self.assertTrue(listener.last_duplicate_rejected)
+
+        newer = {**REAL_NOTIFICATION, "post_time": 1786709129188}
+        self.assertTrue(await listener.async_process_attributes(newer))
+        self.assertEqual(listener.sensor_state_change_count, 3)
+        self.assertEqual(listener.matched_notification_update_count, 3)
+        self.assertTrue(listener.last_post_time_changed)
+        self.assertEqual(listener.last_notification_post_time_ms, 1786709129188)
+        self.assertNotEqual(listener.last_event_fingerprint, first_fingerprint)
+
+    async def test_beta29_counts_unrelated_sensor_update_without_overwriting_match(self):
+        queue = events.EventQueue()
+
+        async def ingest(event):
+            return 1 if queue.enqueue(event) else 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(), "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        self.assertTrue(await listener.async_process_attributes(REAL_NOTIFICATION))
+        saved_post_time = listener.last_notification_post_time_ms
+        self.assertFalse(
+            await listener.async_process_attributes(
+                {
+                    "package": "com.example.other",
+                    "android.title": "Other",
+                    "android.text": "Not Reolink",
+                    "post_time": 1786709130000,
+                }
+            )
+        )
+        self.assertEqual(listener.sensor_state_change_count, 2)
+        self.assertEqual(listener.matched_notification_update_count, 1)
+        self.assertEqual(listener.last_notification_post_time_ms, saved_post_time)
+
     async def test_pending_android_event_restores_runtime_telemetry_after_reload(self):
         event = bridge.notification_event_from_attributes(
             REAL_NOTIFICATION, expected_device_name="atv", uid="camera-1"

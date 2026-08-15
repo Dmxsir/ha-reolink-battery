@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import Event, HomeAssistant, State, callback
@@ -129,6 +129,16 @@ class NotificationBridge:
         self.last_camera_mapped = False
         self.last_event_queued = False
         self.last_duplicate_rejected = False
+        # beta.29 diagnostic-only telemetry. These fields never affect event
+        # identity, queueing, camera wake, or recording download behavior.
+        self.sensor_state_change_count = 0
+        self.matched_notification_update_count = 0
+        self.last_sensor_state_change_time: datetime | None = None
+        self.last_notification_post_time_ms: int | None = None
+        self.last_post_time_changed: bool | None = None
+        self.last_event_fingerprint = ""
+        self.last_processing_lag_seconds: float | None = None
+        self.telemetry_restored_from_pending = False
 
         # The queue is persistent while these fields are runtime telemetry.
         # Restore the latest still-pending Android event on integration reload so
@@ -143,6 +153,10 @@ class NotificationBridge:
             self.last_event_matched = True
             self.last_camera_mapped = bool(self.last_reolink_notification_camera)
             self.last_event_queued = True
+            restored_time = initial_event.notification_post_time or initial_event.alarm_time
+            self.last_notification_post_time_ms = round(restored_time.timestamp() * 1000)
+            self.last_event_fingerprint = initial_event.event_id.removeprefix("android:")[:12]
+            self.telemetry_restored_from_pending = True
 
     @property
     def active(self) -> bool:
@@ -175,6 +189,10 @@ class NotificationBridge:
 
     async def async_process_attributes(self, attributes: Mapping[str, Any]) -> bool:
         """Match, normalize and persist one notification update."""
+        observed_at = datetime.now(UTC)
+        self.sensor_state_change_count += 1
+        self.last_sensor_state_change_time = observed_at
+
         event = notification_event_from_attributes(
             attributes,
             expected_device_name=self._expected_device_name,
@@ -184,6 +202,20 @@ class NotificationBridge:
             # Last Notification is a phone-wide sensor. Unrelated app updates
             # must not erase the last successfully matched Reolink telemetry.
             return False
+
+        self.matched_notification_update_count += 1
+        post_time = event.notification_post_time or event.alarm_time
+        post_time_ms = round(post_time.timestamp() * 1000)
+        previous_post_time_ms = self.last_notification_post_time_ms
+        self.last_post_time_changed = (
+            previous_post_time_ms is None or post_time_ms != previous_post_time_ms
+        )
+        self.last_notification_post_time_ms = post_time_ms
+        self.last_event_fingerprint = event.event_id.removeprefix("android:")[:12]
+        self.last_processing_lag_seconds = round(
+            max(0.0, (observed_at - post_time).total_seconds()), 3
+        )
+        self.telemetry_restored_from_pending = False
 
         self.last_event_matched = True
         self.last_camera_mapped = True
