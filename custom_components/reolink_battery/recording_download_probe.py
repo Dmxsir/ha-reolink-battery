@@ -18,7 +18,11 @@ from reolink_aio.exceptions import ReolinkError
 
 from .camera import CameraStageError, prepare_standalone_channel_zero
 from .events import CloudEvent
-from .recording_probe import _list_recordings_file_info, select_recording_candidate
+from .recording_probe import (
+    FILE_INFO_HEADER_CHANNEL_ID,
+    _list_recordings_file_info,
+    select_recording_candidate,
+)
 from .transport import (
     BoundBaichuanUdpConnection,
     linux_ipv4_interface,
@@ -27,7 +31,22 @@ from .transport import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-DOWNLOAD_HEADER_CHANNEL_ID = 13
+DOWNLOAD_HEADER_CHANNEL_ID = FILE_INFO_HEADER_CHANNEL_ID
+
+
+class DownloadPrepareError(CameraStageError):
+    """Secret-safe cmd13 failure with non-sensitive protocol metadata."""
+
+    def __init__(
+        self,
+        stage: str,
+        *,
+        failure_type: str = "",
+        response_code: int | None = None,
+    ) -> None:
+        super().__init__(stage)
+        self.failure_type = failure_type
+        self.response_code = response_code
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +77,8 @@ class DownloadPrepareState:
     expected_size: int | None = None
     response_file_name_present: bool = False
     failure_stage: str = ""
+    failure_type: str = ""
+    response_code: int | None = None
 
 
 _STATES: dict[str, DownloadPrepareState] = {}
@@ -98,7 +119,7 @@ def _parse_prepare_response(response: str) -> tuple[bool, bool, int | None, bool
     try:
         root = XML.fromstring(response)
     except XML.ParseError as err:
-        raise CameraStageError("DOWNLOAD_PREPARE_PARSE_ERROR") from err
+        raise DownloadPrepareError("DOWNLOAD_PREPARE_PARSE_ERROR") from err
 
     handle_present = bool(root.findtext(".//handle"))
     file_name_present = any(
@@ -181,7 +202,7 @@ async def async_prepare_download_for_event(
         recordings = await _list_recordings_file_info(host, uid, day_start, day_end)
         candidate = select_recording_candidate(target_local, list(recordings))
         if candidate is None:
-            raise CameraStageError("RECORDING_MATCH_ERROR")
+            raise DownloadPrepareError("RECORDING_MATCH_ERROR")
 
         failure_stage = "DOWNLOAD_PREPARE_ERROR"
         try:
@@ -190,12 +211,18 @@ async def async_prepare_download_for_event(
                 body=_download_xml(uid, candidate.file_name),
                 extension=_binary_extension_xml(),
                 ch_id=DOWNLOAD_HEADER_CHANNEL_ID,
-                mess_id=0,
                 message_class="1464",
                 retry=1,
             )
-        except (ReolinkError, OSError, TimeoutError):
-            raise CameraStageError("DOWNLOAD_PREPARE_ERROR") from None
+        except (ReolinkError, OSError, TimeoutError) as err:
+            rsp_code = getattr(err, "rspCode", None)
+            if not isinstance(rsp_code, int):
+                rsp_code = None
+            raise DownloadPrepareError(
+                "DOWNLOAD_PREPARE_ERROR",
+                failure_type=type(err).__name__,
+                response_code=rsp_code,
+            ) from None
 
         response_present, handle_present, expected_size, file_name_present = (
             _parse_prepare_response(response)
@@ -211,9 +238,16 @@ async def async_prepare_download_for_event(
         )
     except CameraStageError:
         raise
-    except (ReolinkError, OSError, TimeoutError):
+    except (ReolinkError, OSError, TimeoutError) as err:
         _LOGGER.warning("%s", failure_stage)
-        raise CameraStageError(failure_stage) from None
+        rsp_code = getattr(err, "rspCode", None)
+        if not isinstance(rsp_code, int):
+            rsp_code = None
+        raise DownloadPrepareError(
+            failure_stage,
+            failure_type=type(err).__name__,
+            response_code=rsp_code,
+        ) from None
     finally:
         try:
             if host is not None:
