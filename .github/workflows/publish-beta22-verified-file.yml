@@ -1,0 +1,149 @@
+name: Publish beta22 verified MP4
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta22-verified-file.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Wire beta22 verified file persistence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          button = Path('custom_components/reolink_battery/button.py')
+          text = button.read_text()
+          text = text.replace('recording_download_probe_beta21', 'recording_download_beta22')
+          text = text.replace(
+              'Probe cmd13 prepare followed by handle-bound full-high cmd8.',
+              'Download and atomically save the verified full-high MP4.'
+          )
+          text = text.replace(
+              'Find recording, run cmd13 then full-high cmd8, then close.',
+              'Find recording, download full-high MP4, verify, save, then close.'
+          )
+          needle = (
+              '                    self.hass.config.time_zone,\n'
+              '                )\n'
+              '        except CameraStageError as err:\n'
+              '            apply_stream_probe_trace('
+          )
+          replacement = (
+              '                    self.hass.config.time_zone,\n'
+              '                    output_dir=self.hass.config.path("reolink_battery", "recordings"),\n'
+              '                )\n'
+              '        except CameraStageError as err:\n'
+              '            apply_stream_probe_trace('
+          )
+          if needle not in text:
+              raise SystemExit('beta22 button output_dir insertion point not found')
+          text = text.replace(needle, replacement, 1)
+          button.write_text(text)
+
+          diag = Path('custom_components/reolink_battery/diagnostics.py')
+          text = diag.read_text()
+          text = text.replace('recording_download_probe_beta21', 'recording_download_beta22')
+          needle = '                "cmd8_layout": stream.cmd8_layout or None,\n'
+          addition = (
+              needle
+              + '                "file_write_attempted": stream.file_write_attempted,\n'
+              + '                "part_created": stream.part_created,\n'
+              + '                "file_bytes_written": stream.file_bytes_written,\n'
+              + '                "fsync_completed": stream.fsync_completed,\n'
+              + '                "mp4_ftyp_valid": stream.mp4_ftyp_valid,\n'
+              + '                "final_size": stream.final_size,\n'
+              + '                "final_size_match": stream.final_size_match,\n'
+              + '                "atomic_rename_completed": stream.atomic_rename_completed,\n'
+              + '                "file_saved": stream.file_saved,\n'
+              + '                "part_removed_on_failure": stream.part_removed_on_failure,\n'
+              + '                "sha256_present": stream.sha256_present,\n'
+              + '                "output_private_path": stream.output_private_path,\n'
+          )
+          if needle not in text:
+              raise SystemExit('beta22 diagnostics insertion point not found')
+          text = text.replace(needle, addition, 1)
+          text = text.replace(
+              '"full_media_download_attempted": False,',
+              '"full_media_download_attempted": stream.file_write_attempted,'
+          )
+          text = text.replace(
+              '3B.2b-cmd13-prepare-cmd8-full-high-probe',
+              '3B.2b-verified-atomic-mp4'
+          )
+          diag.write_text(text)
+          PY
+
+      - name: Install protocol dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe tests.test_recording_download_beta12
+
+      - name: Validate JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path('custom_components/reolink_battery').rglob('*.json'):
+              json.loads(path.read_text())
+          PY
+
+      - name: Static beta22 persistence checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('custom_components/reolink_battery/recording_download_beta22.py').read_text()
+          required = [
+              'os.fsync(fh.fileno())',
+              'os.replace(part, final)',
+              'trace.mp4_ftyp_valid',
+              'trace.final_size_match',
+              'reolink_battery_beta22_output_dir',
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit(f'missing beta22 persistence checks: {missing}')
+          PY
+
+      - name: Commit beta22 wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/button.py custom_components/reolink_battery/diagnostics.py
+          git diff --cached --quiet || git commit -m "Wire beta22 verified MP4 persistence"
+          git push origin HEAD:feature/recording-worker-3b2
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f v0.1.2-beta.22
+          git push -f origin v0.1.2-beta.22
+          gh release delete v0.1.2-beta.22 --yes >/dev/null 2>&1 || true
+          gh release create v0.1.2-beta.22 \
+            --title "Reolink Battery v0.1.2-beta.22" \
+            --prerelease \
+            --target "$(git rev-parse HEAD)" \
+            --notes "Milestone 3B.2b verified file persistence. Keeps the physically validated beta.21 cmd13 Id-only/no-Extension -> returned handle -> cmd8 full-high/mainStream transport unchanged. Writes only MP4 bytes (after the 32-byte BCMedia prefix) to a private /config/reolink_battery/recordings .part file, validates camera-reported size and ftyp, fsyncs, then atomically renames to .mp4. Invalid/incomplete .part files are removed. Diagnostics expose only booleans and byte counts, never recording identity, filename, path, handle, UID, or credentials. No cmd9, automatic worker, queue removal, media-source exposure, or Telegram yet."
