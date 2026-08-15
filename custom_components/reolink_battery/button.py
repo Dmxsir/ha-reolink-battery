@@ -154,7 +154,7 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Probe native cmd13 framing for the pending recording without cmd8."""
+    """Probe cmd13 routing for the pending recording without cmd8."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -178,7 +178,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Find the queued recording, issue one native cmd13 frame, then close."""
+        """Find the queued recording, issue one cmd13 routing probe, then close."""
         event = next(
             (
                 item
@@ -202,16 +202,16 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.failure_stage = ""
         state.failure_type = ""
         state.response_code = None
-        state.request_channel_id = None
-        state.request_stream_type = None
-        state.request_msg_num = None
+        state.request_header_channel_id = None
+        state.request_message_id = None
+        state.request_full_message_id = None
         state.request_message_class = None
         state.request_body_length = None
         state.request_payload_offset = None
         state.response_message_class = None
-        state.response_channel_id = None
-        state.response_stream_type = None
-        state.response_msg_num = None
+        state.response_header_channel_id = None
+        state.response_message_id = None
+        state.response_full_message_id = None
         state.response_body_length = None
         state.response_payload_offset = None
         state.first_payload_length = 0
@@ -239,16 +239,16 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.response_present = True
         state.response_accepted = result.response_accepted
         state.response_code = result.response.response_code
-        state.request_channel_id = result.request.channel_id
-        state.request_stream_type = result.request.stream_type
-        state.request_msg_num = result.request.msg_num
+        state.request_header_channel_id = result.request.header_channel_id
+        state.request_message_id = result.request.message_id
+        state.request_full_message_id = result.request.full_message_id
         state.request_message_class = result.request.message_class
         state.request_body_length = result.request.body_length
         state.request_payload_offset = result.request.payload_offset
         state.response_message_class = result.response.message_class
-        state.response_channel_id = result.response.channel_id
-        state.response_stream_type = result.response.stream_type
-        state.response_msg_num = result.response.msg_num
+        state.response_header_channel_id = result.response.header_channel_id
+        state.response_message_id = result.response.message_id
+        state.response_full_message_id = result.response.full_message_id
         state.response_body_length = result.response.body_length
         state.response_payload_offset = result.response.payload_offset
         state.first_payload_length = result.response.payload_length
