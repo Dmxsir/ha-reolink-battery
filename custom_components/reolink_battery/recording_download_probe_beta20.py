@@ -167,9 +167,14 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         self._p2p_heartbeat_tid: int | None = None
 
     async def _create_connection(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
+        handoff = self._take_handoff_socket()
+        lease = None
+        if handoff is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind((self.source_ip, 0))
+        else:
+            sock, lease = handoff
+        try:
             sock.setblocking(False)
             created = await self._loop.create_datagram_endpoint(
                 lambda: _P2PHeartbeatProbeProtocol(
@@ -187,6 +192,9 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             raise
         transport, protocol = created
         _, self._local_port = transport.get_extra_info("sockname")
+        if lease is not None:
+            self._apply_handoff_protocol(protocol, lease)
+            self._p2p_heartbeat_tid = self._handoff_transaction_id
         return transport, protocol
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:

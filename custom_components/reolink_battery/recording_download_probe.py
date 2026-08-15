@@ -454,12 +454,14 @@ async def async_prepare_download_for_event(
             host.baichuan._push_callback,
             host.baichuan._close_callback,
             uid=uid,
+            handoff_lease=lease,
         )
         host.baichuan._connection = connection
 
         failure_stage = "WAKE_ERROR"
         await connection.connect()
-        lease.close()
+        if lease.socket is not None:
+            raise RuntimeError("single lease handoff was not adopted")
         lease = None
 
         failure_stage = "AUTH_ERROR"

@@ -264,6 +264,19 @@ async def async_get_config_entry_diagnostics(
                 "part_removed_on_failure": stream.part_removed_on_failure,
                 "sha256_present": stream.sha256_present,
                 "output_private_path": stream.output_private_path,
+                "telemetry_owner": stream.telemetry_owner,
+                "telemetry_event_time": (
+                    stream.telemetry_event_time.isoformat()
+                    if stream.telemetry_event_time
+                    else None
+                ),
+                "single_lease_handoff": stream.single_lease_handoff,
+                "single_lease_socket_reused": stream.single_lease_socket_reused,
+                "single_lease_ids_reused": stream.single_lease_ids_reused,
+                "single_lease_transaction_id_reused": (
+                    stream.single_lease_transaction_id_reused
+                ),
+                "secondary_connect_sent": stream.secondary_connect_sent,
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -337,7 +350,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.5-notification-telemetry",
+        "milestone": "3B.5-single-lease-handoff",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

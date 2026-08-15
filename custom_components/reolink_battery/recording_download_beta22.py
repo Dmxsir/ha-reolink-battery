@@ -16,6 +16,7 @@ import hashlib
 import os
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,15 +42,33 @@ class VerifiedFileTrace(beta21.FullHighProbeTrace):
     part_removed_on_failure: bool = False
     sha256_present: bool = False
     output_private_path: bool = True
+    telemetry_owner: str = "manual"
+    telemetry_event_time: datetime | None = None
+    single_lease_handoff: bool = False
+    single_lease_socket_reused: bool = False
+    single_lease_ids_reused: bool = False
+    single_lease_transaction_id_reused: bool = False
+    secondary_connect_sent: bool = False
 
 
 _STREAM_STATES: dict[str, VerifiedFileTrace] = {}
 _OUTPUT_DIR: ContextVar[str | None] = ContextVar(
     "reolink_battery_beta22_output_dir", default=None
 )
+_TELEMETRY_OWNER: ContextVar[str] = ContextVar(
+    "reolink_battery_beta30_telemetry_owner", default="manual"
+)
+_TELEMETRY_EVENT_TIME: ContextVar[datetime | None] = ContextVar(
+    "reolink_battery_beta30_telemetry_event_time", default=None
+)
 
 
-def _new_trace(*, attempted: bool = False) -> VerifiedFileTrace:
+def _new_trace(
+    *,
+    attempted: bool = False,
+    telemetry_owner: str | None = None,
+    telemetry_event_time: datetime | None = None,
+) -> VerifiedFileTrace:
     return VerifiedFileTrace(
         attempted=attempted,
         sample_limit_bytes=beta21.STREAM_SAMPLE_MAX_BYTES,
@@ -58,6 +77,12 @@ def _new_trace(*, attempted: bool = False) -> VerifiedFileTrace:
         keepalive_attempted=False,
         keepalive_count=0,
         keepalive_interval_seconds=0.0,
+        telemetry_owner=telemetry_owner or _TELEMETRY_OWNER.get(),
+        telemetry_event_time=(
+            telemetry_event_time
+            if telemetry_event_time is not None
+            else _TELEMETRY_EVENT_TIME.get()
+        ),
     )
 
 
@@ -69,8 +94,17 @@ def stream_probe_state(entry_id: str) -> VerifiedFileTrace:
     return _STREAM_STATES.setdefault(entry_id, _new_trace())
 
 
-def reset_stream_probe_state(entry_id: str) -> None:
-    _STREAM_STATES[entry_id] = _new_trace(attempted=True)
+def reset_stream_probe_state(
+    entry_id: str,
+    *,
+    telemetry_owner: str = "manual",
+    telemetry_event_time: datetime | None = None,
+) -> None:
+    _STREAM_STATES[entry_id] = _new_trace(
+        attempted=True,
+        telemetry_owner=telemetry_owner,
+        telemetry_event_time=telemetry_event_time,
+    )
 
 
 def apply_stream_probe_trace(entry_id: str, trace: VerifiedFileTrace | None) -> None:
@@ -109,6 +143,27 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
             encryptor, decryptor, candidate, cmd8_msg_num
         )
         self._stream_trace = _new_trace(attempted=True)
+        self._stream_trace.single_lease_handoff = bool(
+            getattr(self, "_handoff_mode", False)
+        )
+        self._stream_trace.single_lease_socket_reused = bool(
+            getattr(self, "_handoff_active", False)
+        )
+        self._stream_trace.single_lease_ids_reused = (
+            self._stream_trace.single_lease_socket_reused
+            and getattr(self._protocol, "client_id", None) is not None
+            and getattr(self._protocol, "host_id", None) is not None
+        )
+        self._stream_trace.single_lease_transaction_id_reused = (
+            self._stream_trace.single_lease_socket_reused
+            and getattr(self, "_handoff_transaction_id", None) is not None
+            and getattr(self, "_p2p_heartbeat_tid", None)
+            == getattr(self, "_handoff_transaction_id", None)
+        )
+        self._stream_trace.secondary_connect_sent = not (
+            self._stream_trace.single_lease_handoff
+            and self._stream_trace.single_lease_socket_reused
+        )
         output_dir = _OUTPUT_DIR.get()
         if not output_dir:
             raise RuntimeError("beta22 private output directory not configured")
@@ -248,16 +303,22 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
 async def async_prepare_download_for_event(
     *args,
     output_dir: str | None = None,
+    telemetry_owner: str = "manual",
+    telemetry_event_time: datetime | None = None,
     **kwargs,
 ):
     """Run beta.21 protocol and persist a verified MP4 to a private directory."""
     if not output_dir:
         raise RuntimeError("beta22 output_dir is required")
-    token = _OUTPUT_DIR.set(output_dir)
+    output_token = _OUTPUT_DIR.set(output_dir)
+    owner_token = _TELEMETRY_OWNER.set(telemetry_owner)
+    event_token = _TELEMETRY_EVENT_TIME.set(telemetry_event_time)
     try:
         return await beta21.async_prepare_download_for_event(*args, **kwargs)
     finally:
-        _OUTPUT_DIR.reset(token)
+        _TELEMETRY_EVENT_TIME.reset(event_token)
+        _TELEMETRY_OWNER.reset(owner_token)
+        _OUTPUT_DIR.reset(output_token)
 
 
 # Beta.21's cmd13 builder recognizes subclasses of _FullHighCmd8Connection and

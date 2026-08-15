@@ -23,6 +23,7 @@ from reolink_aio.baichuan.util import (
     decrypt_udp_baichuan,
     encrypt_udp_baichuan,
 )
+from reolink_aio.exceptions import ReolinkConnectionError
 
 DISCOVERY_PORTS = (2018, 2015)
 DISCOVERY_MAGIC = bytes.fromhex("3acf872a")
@@ -136,7 +137,7 @@ def _parse_reply(data: bytes, expected_client_id: int) -> int | None:
 
 @dataclass(slots=True)
 class UidLanLease:
-    """Temporary UID discovery lease retained until transport is open."""
+    """UID discovery lease whose live socket can be handed to Baichuan."""
 
     host: str
     port: int
@@ -144,18 +145,29 @@ class UidLanLease:
     interface_index: int
     client_id: int
     device_id: int
-    socket: socket.socket
+    transaction_id: int
+    socket: socket.socket | None
+
+    def detach_socket(self) -> socket.socket:
+        """Transfer socket ownership without sending a discovery disconnect."""
+        sock = self.socket
+        if sock is None or sock.fileno() < 0:
+            raise RuntimeError("UID LAN lease socket is not available")
+        self.socket = None
+        return sock
 
     def close(self) -> None:
-        if self.socket.fileno() < 0:
+        sock = self.socket
+        if sock is None or sock.fileno() < 0:
             return
         body = xmls.UDP_DISCONNECT_XML.format(
             client_id=self.client_id, host_id=self.device_id
         )
         try:
-            self.socket.sendto(_packet(body), (self.host, self.port))
+            sock.sendto(_packet(body), (self.host, self.port))
         finally:
-            self.socket.close()
+            sock.close()
+            self.socket = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +215,7 @@ def resolve_uid_lan(
         mtu=1350,
     ).replace("<p>WIN</p>", "<p>MAC</p>")
     packet = _packet(body)
+    transaction_id = int.from_bytes(packet[12:16], "little")
     targets = _broadcast_targets(interface)
     deadline = time.monotonic() + timeout
     next_send = 0.0
@@ -226,6 +239,7 @@ def resolve_uid_lan(
                     interface_index,
                     client_id,
                     device_id,
+                    transaction_id,
                     sock,
                 )
     except BaseException:
@@ -321,16 +335,71 @@ class _IdempotentUdpClientProtocol(BaichuanUdpClientProtocol):
 class BoundBaichuanUdpConnection(BaichuanUdpConnection):
     """Baichuan UDP connection pinned to the selected source IPv4."""
 
-    def __init__(self, host: str, source_ip: str, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        host: str,
+        source_ip: str,
+        *args,
+        handoff_lease: UidLanLease | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(host, *args, **kwargs)
         self.source_ip = source_ip
+        self._handoff_mode = handoff_lease is not None
+        self._handoff_lease = handoff_lease
+        self._handoff_active = False
+        self._handoff_transaction_id: int | None = None
+
+    def _take_handoff_socket(
+        self,
+    ) -> tuple[socket.socket, UidLanLease] | None:
+        lease = self._handoff_lease
+        if lease is None:
+            return None
+        if lease.host != self._host or lease.source_ip != self.source_ip:
+            raise OSError("UID LAN lease does not match requested Baichuan endpoint")
+        sock = lease.detach_socket()
+        self._handoff_lease = None
+        self._handoff_active = True
+        self._handoff_transaction_id = lease.transaction_id
+        return sock, lease
+
+    def _apply_handoff_protocol(
+        self, protocol: BaichuanUdpClientProtocol, lease: UidLanLease
+    ) -> None:
+        protocol.client_id = lease.client_id
+        protocol.host_id = lease.device_id
+        protocol.remote_port = lease.port
+        self._port = lease.port
+
+    async def connect(self):
+        """Adopt the discovery socket once; never create a second P2P identity."""
+        if not self._handoff_mode:
+            await super().connect()
+            return
+        if self.connection_open:
+            return
+        if self._handoff_lease is None:
+            raise ReolinkConnectionError(
+                f"Baichuan host {self._host}: single lease session cannot be reopened"
+            )
+        await BaichuanBaseConnection.connect(self)
+        if not self.connection_open:
+            raise ReolinkConnectionError(
+                f"Baichuan host {self._host}: single lease handoff did not open"
+            )
 
     async def _create_connection(
         self,
     ) -> tuple[asyncio.DatagramTransport, BaichuanUdpClientProtocol]:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
+        handoff = self._take_handoff_socket()
+        lease = None
+        if handoff is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind((self.source_ip, 0))
+        else:
+            sock, lease = handoff
+        try:
             sock.setblocking(False)
             transport, protocol = await self._loop.create_datagram_endpoint(
                 lambda: _IdempotentUdpClientProtocol(
@@ -347,6 +416,8 @@ class BoundBaichuanUdpConnection(BaichuanUdpConnection):
             sock.close()
             raise
         _, self._local_port = transport.get_extra_info("sockname")
+        if lease is not None:
+            self._apply_handoff_protocol(protocol, lease)
         return transport, protocol
 
     async def send_file_download_probe(

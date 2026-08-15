@@ -269,6 +269,8 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
                     ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]),
                     self.hass.config.time_zone,
                     output_dir=self.hass.config.path("reolink_battery", "recordings"),
+                    telemetry_owner="manual",
+                    telemetry_event_time=event.notification_post_time or event.alarm_time,
                 )
         except CameraStageError as err:
             apply_stream_probe_trace(

@@ -152,7 +152,12 @@ class RecordingWorker:
 
         # Do not let a previous partial cmd8 attempt leak into diagnostics for a
         # later failure that occurs before cmd13/cmd8 (for example cmd14 open).
-        reset_stream_probe_state(self._entry.entry_id)
+        event_time = event.notification_post_time or event.alarm_time
+        reset_stream_probe_state(
+            self._entry.entry_id,
+            telemetry_owner="worker",
+            telemetry_event_time=event_time,
+        )
 
         media_dirs = self._hass.config.media_dirs
         if not media_dirs:
@@ -172,6 +177,8 @@ class RecordingWorker:
                     ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]),
                     self._hass.config.time_zone,
                     output_dir=str(output_dir),
+                    telemetry_owner="worker",
+                    telemetry_event_time=event_time,
                 )
         except CameraStageError as err:
             apply_stream_probe_trace(
