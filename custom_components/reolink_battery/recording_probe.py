@@ -339,6 +339,7 @@ async def _list_recordings_file_info(
                 cmd_id=14,
                 body=open_xml,
                 ch_id=FILE_INFO_HEADER_CHANNEL_ID,
+                retry=1,
             )
             trace.open_succeeded = True
             break
