@@ -22,7 +22,7 @@ from .const import (
     CONF_UID,
     DOMAIN,
 )
-from .recording_download_probe_beta20 import (
+from .recording_download_probe_beta21 import (
     apply_file_info_trace,
     apply_identity_trace,
     apply_stream_probe_trace,
@@ -158,7 +158,7 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Probe cmd13/cmd8 full-transfer shape with same-session keepalive."""
+    """Probe cmd13 prepare followed by handle-bound full-high cmd8."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -182,7 +182,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Find recording, run cmd13/cmd8 with keepalive, then close."""
+        """Find recording, run cmd13 then full-high cmd8, then close."""
         event = next(
             (
                 item
