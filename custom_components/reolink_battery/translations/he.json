@@ -5,17 +5,24 @@
       "user": {
         "title": "חשבון Reolink",
         "description": "התחבר כדי לגלות את מצלמות הסוללה. שלב זה אינו פונה למצלמה ואינו מעיר אותה.",
-        "data": {"email": "דוא״ל החשבון", "password": "סיסמת החשבון"}
+        "data": {
+          "email": "דוא״ל החשבון",
+          "password": "סיסמת החשבון"
+        }
       },
       "mfa": {
         "title": "אימות דו־שלבי",
         "description": "הזן את קוד האימות שנשלח על ידי Reolink.",
-        "data": {"code": "קוד אימות"}
+        "data": {
+          "code": "קוד אימות"
+        }
       },
       "device": {
         "title": "בחירת מצלמה",
         "description": "בחר את מצלמת הסוללה שברצונך להוסיף.",
-        "data": {"uid": "מצלמה"}
+        "data": {
+          "uid": "מצלמה"
+        }
       },
       "local": {
         "title": "פרטי התחברות מקומיים למצלמה",
@@ -44,29 +51,55 @@
   "options": {
     "step": {
       "init": {
-        "title": "גשר התראות תנועה",
+        "title": "גשר התראות ושליחה ל-Telegram",
         "description": "ניתן לבחור את חיישן Last Notification של אפליקציית Home Assistant Companion בטלפון Android שמקבל את התראות Reolink. ההאזנה מתבצעת בתוך Home Assistant בלבד ואינה פונה למצלמה ואינה מעירה אותה.",
-        "data": {"notification_entity": "ישות מקור ההתראות"},
+        "data": {
+          "notification_entity": "ישות מקור ההתראות",
+          "telegram_notify_entity": "יעד Telegram"
+        },
         "data_description": {
-          "notification_entity": "בחר את חיישן Last Notification של Companion App. השאר ריק כדי להשבית את גשר ההתראות."
+          "notification_entity": "בחר את חיישן Last Notification של Companion App. השאר ריק כדי להשבית את גשר ההתראות.",
+          "telegram_notify_entity": "אופציונלי: ישות Notify של Telegram Bot. הווידאו יישלח רק לאחר שה-MP4 נשמר ואומת."
         }
       }
     }
   },
   "entity": {
     "sensor": {
-      "battery": {"name": "סוללה"},
-      "storage_total": {"name": "נפח אחסון כולל"},
-      "storage_used": {"name": "אחסון בשימוש"},
-      "storage_free": {"name": "אחסון פנוי"},
-      "wifi_signal": {"name": "עוצמת אות Wi-Fi"},
-      "last_local_refresh": {"name": "רענון מקומי אחרון"}
+      "battery": {
+        "name": "סוללה"
+      },
+      "storage_total": {
+        "name": "נפח אחסון כולל"
+      },
+      "storage_used": {
+        "name": "אחסון בשימוש"
+      },
+      "storage_free": {
+        "name": "אחסון פנוי"
+      },
+      "wifi_signal": {
+        "name": "עוצמת אות Wi-Fi"
+      },
+      "last_local_refresh": {
+        "name": "רענון מקומי אחרון"
+      }
     },
-    "binary_sensor": {"charging": {"name": "בטעינה"}},
+    "binary_sensor": {
+      "charging": {
+        "name": "בטעינה"
+      }
+    },
     "button": {
-      "refresh_device_status": {"name": "רענון מצב המצלמה"},
-      "find_pending_recording": {"name": "מצא הקלטה לאירוע הממתין"},
-      "prepare_pending_recording_download": {"name": "הכן הורדת הקלטה ממתינה"}
+      "refresh_device_status": {
+        "name": "רענון מצב המצלמה"
+      },
+      "find_pending_recording": {
+        "name": "מצא הקלטה לאירוע הממתין"
+      },
+      "prepare_pending_recording_download": {
+        "name": "הכן הורדת הקלטה ממתינה"
+      }
     }
   }
 }

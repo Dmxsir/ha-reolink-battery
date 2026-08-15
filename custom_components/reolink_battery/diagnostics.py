@@ -309,9 +309,20 @@ async def async_get_config_entry_diagnostics(
             "last_file_saved": bool(worker and worker.state.last_file_saved),
             "last_file_size": worker.state.last_file_size if worker else 0,
             "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),
+            "telegram_configured": bool(worker and worker.state.telegram_configured),
+            "telegram_send_attempted": bool(worker and worker.state.telegram_send_attempted),
+            "telegram_send_succeeded": bool(worker and worker.state.telegram_send_succeeded),
+            "telegram_path_allowed": worker.state.telegram_path_allowed if worker else None,
+            "telegram_service_available": worker.state.telegram_service_available if worker else None,
+            "telegram_last_failure_stage": (worker.state.telegram_last_failure_stage or None) if worker else None,
+            "telegram_last_failure_type": (worker.state.telegram_last_failure_type or None) if worker else None,
+            "telegram_last_send_time": (
+                worker.state.telegram_last_send_time.isoformat()
+                if worker and worker.state.telegram_last_send_time else None
+            ),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.3-automatic-verified-recording-worker",
+        "milestone": "3B.4-telegram-delivery",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

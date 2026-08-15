@@ -41,6 +41,7 @@ from .const import (
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
     CONF_NOTIFICATION_ENTITY,
+    CONF_TELEGRAM_NOTIFY_ENTITY,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRES_AT,
     CONF_UID,
@@ -57,7 +58,10 @@ _NOTIFICATION_OPTIONS_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_NOTIFICATION_ENTITY): EntitySelector(
             EntitySelectorConfig(domain="sensor")
-        )
+        ),
+        vol.Optional(CONF_TELEGRAM_NOTIFY_ENTITY): EntitySelector(
+            EntitySelectorConfig(domain="notify")
+        ),
     }
 )
 
