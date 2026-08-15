@@ -48,6 +48,20 @@
       "unsupported_auth_path": "This milestone supports the verified legacy local-credential path only."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Motion notification bridge",
+        "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. This listener is Home Assistant-local and does not contact or wake the camera.",
+        "data": {
+          "notification_entity": "Notification source entity"
+        },
+        "data_description": {
+          "notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "battery": {"name": "Battery"},
