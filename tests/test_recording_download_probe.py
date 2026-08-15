@@ -1,4 +1,4 @@
-"""Offline tests for Milestone 3B.2b cmd13 routing probe."""
+"""Offline tests for Milestone 3B.2b cmd13 identity probe."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import importlib
 import sys
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -30,14 +31,87 @@ class _FakeBaichuan:
         return data
 
 
+def _candidate(**overrides):
+    values = {
+        "file_name": "record-identity",
+        "start_time": datetime(2026, 8, 15, 10, 22, 54),
+        "end_time": datetime(2026, 8, 15, 10, 23, 28),
+        "size": 0,
+        "distance_seconds": 4.792,
+        "record_id": "record-identity",
+        "xml_file_name": "/mnt/sda/a&b/test<1>.mp4",
+        "display_name": "test<1>.mp4",
+        "channel_id": 0,
+        "stream_type": "mainStream",
+        "file_type": "mp4",
+        "record_type": "md",
+    }
+    values.update(overrides)
+    return recording_probe.RecordingCandidate(**values)
+
+
 class DownloadPrepareHelperTests(unittest.TestCase):
-    def test_download_xml_matches_file_info_list_download_shape(self):
-        xml = probe._download_xml("ABC123", "/mnt/sda/a&b/test<1>.mp4")
+    def test_download_xml_uses_exact_distinct_identity_fields(self):
+        xml = probe._download_xml(
+            "ABC123",
+            channel_id=0,
+            record_id="record&identity",
+            file_name="/mnt/sda/a&b/test<1>.mp4",
+            display_name="test<1>.mp4",
+        )
         self.assertIn("<channelId>0</channelId>", xml)
         self.assertIn("<uid>ABC123</uid>", xml)
-        self.assertIn("/mnt/sda/a&amp;b/test&lt;1&gt;.mp4", xml)
+        self.assertIn("<fileName>/mnt/sda/a&amp;b/test&lt;1&gt;.mp4</fileName>", xml)
         self.assertIn("<name>test&lt;1&gt;.mp4</name>", xml)
-        self.assertIn("<Id>/mnt/sda/a&amp;b/test&lt;1&gt;.mp4</Id>", xml)
+        self.assertIn("<Id>record&amp;identity</Id>", xml)
+
+    def test_identity_trace_reports_shape_without_raw_values(self):
+        _, record_id, file_name, display_name, trace = probe._resolve_download_identity(
+            _candidate()
+        )
+        self.assertEqual(record_id, "record-identity")
+        self.assertEqual(file_name, "/mnt/sda/a&b/test<1>.mp4")
+        self.assertEqual(display_name, "test<1>.mp4")
+        self.assertTrue(trace.id_present)
+        self.assertTrue(trace.file_name_present)
+        self.assertTrue(trace.name_present)
+        self.assertFalse(trace.id_equals_file_name)
+        self.assertFalse(trace.id_equals_name)
+        self.assertFalse(trace.file_name_equals_name)
+        self.assertFalse(trace.id_looks_like_path)
+        self.assertTrue(trace.file_name_looks_like_path)
+        self.assertEqual(trace.xml_channel_id_value, 0)
+        self.assertEqual(trace.stream_type_value, "mainStream")
+        self.assertEqual(trace.file_type_value, "mp4")
+        self.assertEqual(trace.record_type_value, "md")
+        self.assertTrue(trace.used_exact_id)
+        self.assertTrue(trace.used_exact_file_name)
+        self.assertTrue(trace.used_exact_name)
+
+    def test_identity_fallbacks_do_not_claim_exact_fields(self):
+        candidate = _candidate(
+            file_name="fallback.mp4",
+            record_id="",
+            xml_file_name="",
+            display_name="",
+            channel_id=None,
+            stream_type="",
+            file_type="",
+            record_type="",
+        )
+        channel, record_id, file_name, display_name, trace = (
+            probe._resolve_download_identity(candidate)
+        )
+        self.assertEqual(channel, 0)
+        self.assertEqual(record_id, "fallback.mp4")
+        self.assertEqual(file_name, "fallback.mp4")
+        self.assertEqual(display_name, "fallback.mp4")
+        self.assertFalse(trace.id_present)
+        self.assertFalse(trace.file_name_present)
+        self.assertFalse(trace.name_present)
+        self.assertFalse(trace.used_exact_id)
+        self.assertFalse(trace.used_exact_file_name)
+        self.assertFalse(trace.used_exact_name)
 
     def test_binary_extension_is_unchanged(self):
         xml = probe._binary_extension_xml()
@@ -46,8 +120,8 @@ class DownloadPrepareHelperTests(unittest.TestCase):
 
     def test_cmd13_wire_uses_channel_stream_msgnum16_layout(self):
         baichuan = _FakeBaichuan(10)
-        wire, meta = probe._build_cmd13_wire(
-            baichuan, "ABC123", "/mnt/sda/recording.mp4"
+        wire, meta, identity = probe._build_cmd13_wire(
+            baichuan, "ABC123", _candidate()
         )
 
         self.assertEqual(wire[0:4], bytes.fromhex("f0debc0a"))
@@ -65,19 +139,30 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         self.assertEqual(meta.msg_num, 11)
         self.assertEqual(meta.message_class, 0x6482)
         self.assertEqual(baichuan._mess_id, 11)
+        self.assertTrue(identity.used_exact_id)
+
+    def test_cmd13_payload_contains_exact_fileinfo_values(self):
+        baichuan = _FakeBaichuan(2)
+        wire, meta, _ = probe._build_cmd13_wire(
+            baichuan, "ABC123", _candidate()
+        )
+        payload = wire[24 + meta.payload_offset :].decode("utf-8")
+        self.assertIn("<Id>record-identity</Id>", payload)
+        self.assertIn("<fileName>/mnt/sda/a&amp;b/test&lt;1&gt;.mp4</fileName>", payload)
+        self.assertIn("<name>test&lt;1&gt;.mp4</name>", payload)
 
     def test_msg_num_uses_full_16_bits(self):
         baichuan = _FakeBaichuan(0x1233)
-        wire, meta = probe._build_cmd13_wire(
-            baichuan, "ABC123", "/mnt/sda/recording.mp4"
+        wire, meta, _ = probe._build_cmd13_wire(
+            baichuan, "ABC123", _candidate()
         )
         self.assertEqual(meta.msg_num, 0x1234)
         self.assertEqual(wire[12:16], bytes([7, 0, 0x34, 0x12]))
 
     def test_payload_offset_is_binary_extension_length(self):
         baichuan = _FakeBaichuan()
-        _, meta = probe._build_cmd13_wire(
-            baichuan, "ABC123", "/mnt/sda/recording.mp4"
+        _, meta, _ = probe._build_cmd13_wire(
+            baichuan, "ABC123", _candidate()
         )
         self.assertEqual(
             meta.payload_offset,
@@ -86,8 +171,8 @@ class DownloadPrepareHelperTests(unittest.TestCase):
 
     def test_msg_num_wraps_at_16_bits(self):
         baichuan = _FakeBaichuan((1 << 16) - 1)
-        wire, meta = probe._build_cmd13_wire(
-            baichuan, "ABC123", "/mnt/sda/recording.mp4"
+        wire, meta, _ = probe._build_cmd13_wire(
+            baichuan, "ABC123", _candidate()
         )
         self.assertEqual(meta.msg_num, 0)
         self.assertEqual(baichuan._mess_id, 0)
@@ -152,6 +237,18 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         self.assertTrue(state.file_info_close_attempted)
         self.assertFalse(state.file_info_close_succeeded)
         self.assertEqual(state.file_info_close_response_code, 400)
+
+    def test_identity_trace_copies_to_secret_safe_state(self):
+        *_, trace = probe._resolve_download_identity(_candidate())
+        state = probe.DownloadPrepareState()
+        probe.apply_identity_trace(state, trace)
+        self.assertTrue(state.identity_id_present)
+        self.assertTrue(state.identity_file_name_present)
+        self.assertTrue(state.identity_name_present)
+        self.assertEqual(state.identity_stream_type_value, "mainStream")
+        self.assertTrue(state.identity_used_exact_id)
+        self.assertTrue(state.identity_used_exact_file_name)
+        self.assertTrue(state.identity_used_exact_name)
 
 
 if __name__ == "__main__":
