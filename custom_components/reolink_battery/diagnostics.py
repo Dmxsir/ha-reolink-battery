@@ -246,6 +246,18 @@ async def async_get_config_entry_diagnostics(
                 "p2p_heartbeat_attempted": stream.p2p_heartbeat_attempted,
                 "p2p_heartbeat_count": stream.p2p_heartbeat_count,
                 "p2p_heartbeat_interval_seconds": stream.p2p_heartbeat_interval_seconds,
+                "p2p_heartbeat_started_after_handoff": (
+                    stream.p2p_heartbeat_started_after_handoff
+                ),
+                "p2p_heartbeat_first_delay_seconds": (
+                    stream.p2p_heartbeat_first_delay_seconds
+                ),
+                "p2p_heartbeat_pre_cmd13_count": (
+                    stream.p2p_heartbeat_pre_cmd13_count
+                ),
+                "p2p_heartbeat_background_task_active": (
+                    stream.p2p_heartbeat_background_task_active
+                ),
                 "proactive_cmd234_count": stream.proactive_cmd234_count,
                 "cmd8_full_high": stream.cmd8_full_high,
                 "cmd8_handle_used": stream.cmd8_handle_used,
@@ -350,7 +362,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.5-single-lease-handoff",
+        "milestone": "3B.6-continuous-p2p-heartbeat",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

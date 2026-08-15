@@ -60,11 +60,40 @@ class P2PHeartbeatProbeTests(unittest.TestCase):
         self.assertEqual(trace.proactive_cmd234_count, 0)
         self.assertEqual(trace.p2p_heartbeat_count, 0)
         self.assertEqual(trace.p2p_heartbeat_interval_seconds, 1.0)
+        self.assertFalse(trace.p2p_heartbeat_started_after_handoff)
+        self.assertIsNone(trace.p2p_heartbeat_first_delay_seconds)
+        self.assertEqual(trace.p2p_heartbeat_pre_cmd13_count, 0)
+        self.assertFalse(trace.p2p_heartbeat_background_task_active)
         self.assertEqual(trace.aggregate_limit_bytes, 16 * 1024 * 1024)
         self.assertEqual(
             probe.CONTENT_LAYOUT,
             "cmd13_prepare_cmd8_p2p_heartbeat_full_transfer_shape",
         )
+
+    def test_continuous_heartbeat_trace_captures_pre_cmd13_snapshot(self):
+        class _Task:
+            @staticmethod
+            def done():
+                return False
+
+        connection = object.__new__(probe._P2PHeartbeatFullTransferConnection)
+        connection._p2p_heartbeat_total_count = 5
+        connection._p2p_heartbeat_started_after_handoff = True
+        connection._p2p_heartbeat_started_at = 10.0
+        connection._p2p_heartbeat_first_sent_at = 10.125
+        connection._p2p_heartbeat_task = _Task()
+
+        trace = probe._new_trace(attempted=True)
+        connection._apply_p2p_heartbeat_trace(
+            trace, snapshot_pre_cmd13=True
+        )
+
+        self.assertTrue(trace.p2p_heartbeat_attempted)
+        self.assertEqual(trace.p2p_heartbeat_count, 5)
+        self.assertTrue(trace.p2p_heartbeat_started_after_handoff)
+        self.assertEqual(trace.p2p_heartbeat_first_delay_seconds, 0.125)
+        self.assertEqual(trace.p2p_heartbeat_pre_cmd13_count, 5)
+        self.assertTrue(trace.p2p_heartbeat_background_task_active)
 
 
 if __name__ == "__main__":

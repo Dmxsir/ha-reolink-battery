@@ -42,6 +42,10 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     p2p_heartbeat_attempted: bool = False
     p2p_heartbeat_count: int = 0
     p2p_heartbeat_interval_seconds: float = P2P_HEARTBEAT_INTERVAL
+    p2p_heartbeat_started_after_handoff: bool = False
+    p2p_heartbeat_first_delay_seconds: float | None = None
+    p2p_heartbeat_pre_cmd13_count: int = 0
+    p2p_heartbeat_background_task_active: bool = False
     proactive_cmd234_count: int = 0
     remote_disconnect_observed: bool = False
     connection_lost_exception_present: bool = False
@@ -165,6 +169,11 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         super().__init__(*args, **kwargs)
         self._stream_trace = _new_trace(attempted=True)
         self._p2p_heartbeat_tid: int | None = None
+        self._p2p_heartbeat_task: asyncio.Task[None] | None = None
+        self._p2p_heartbeat_started_at: float | None = None
+        self._p2p_heartbeat_first_sent_at: float | None = None
+        self._p2p_heartbeat_total_count = 0
+        self._p2p_heartbeat_started_after_handoff = False
 
     async def _create_connection(self):
         handoff = self._take_handoff_socket()
@@ -242,6 +251,93 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         transport.sendto(packet, (self._host, self._port))
         return True
 
+    def _record_p2p_heartbeat(self) -> bool:
+        """Send one heartbeat and update connection-lifetime counters."""
+        if not self._send_p2p_heartbeat():
+            return False
+        now = self._loop.time()
+        self._p2p_heartbeat_total_count += 1
+        if self._p2p_heartbeat_first_sent_at is None:
+            self._p2p_heartbeat_first_sent_at = now
+        return True
+
+    def _apply_p2p_heartbeat_trace(
+        self,
+        trace: P2PHeartbeatProbeTrace,
+        *,
+        snapshot_pre_cmd13: bool = False,
+    ) -> None:
+        """Copy secret-safe connection-lifetime heartbeat facts into a trace."""
+        trace.p2p_heartbeat_attempted = self._p2p_heartbeat_total_count > 0
+        trace.p2p_heartbeat_count = self._p2p_heartbeat_total_count
+        trace.p2p_heartbeat_started_after_handoff = (
+            self._p2p_heartbeat_started_after_handoff
+        )
+        started = self._p2p_heartbeat_started_at
+        first = self._p2p_heartbeat_first_sent_at
+        trace.p2p_heartbeat_first_delay_seconds = (
+            round(max(0.0, first - started), 3)
+            if started is not None and first is not None
+            else None
+        )
+        task = self._p2p_heartbeat_task
+        trace.p2p_heartbeat_background_task_active = bool(
+            task is not None and not task.done()
+        )
+        if snapshot_pre_cmd13:
+            trace.p2p_heartbeat_pre_cmd13_count = self._p2p_heartbeat_total_count
+
+    async def _p2p_heartbeat_loop(self) -> None:
+        """Maintain the adopted P2P lease until the Baichuan session closes."""
+        try:
+            while self.connection_open:
+                await asyncio.sleep(P2P_HEARTBEAT_INTERVAL)
+                if not self.connection_open:
+                    break
+                try:
+                    self._record_p2p_heartbeat()
+                except (OSError, RuntimeError):
+                    break
+        except asyncio.CancelledError:
+            raise
+
+    def _start_p2p_heartbeat_loop(self) -> None:
+        """Start one immediate heartbeat plus one background sender after handoff."""
+        if not getattr(self, "_handoff_active", False):
+            return
+        if self._p2p_heartbeat_tid is None:
+            return
+        task = self._p2p_heartbeat_task
+        if task is not None and not task.done():
+            return
+        self._p2p_heartbeat_started_after_handoff = True
+        self._p2p_heartbeat_started_at = self._loop.time()
+        self._record_p2p_heartbeat()
+        self._p2p_heartbeat_task = self._loop.create_task(
+            self._p2p_heartbeat_loop()
+        )
+
+    async def _stop_p2p_heartbeat_loop(self) -> None:
+        task = self._p2p_heartbeat_task
+        self._p2p_heartbeat_task = None
+        if task is None or task is asyncio.current_task():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def connect(self):
+        """Open/adopt the session and start heartbeat before login/FileInfo."""
+        await super().connect()
+        self._start_p2p_heartbeat_loop()
+
+    async def close(self) -> None:
+        """Stop the sole heartbeat sender before closing the adopted session."""
+        await self._stop_p2p_heartbeat_loop()
+        await super().close()
+
     async def send_file_download_probe(
         self,
         wire: bytes,
@@ -265,8 +361,8 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             self._observe_frame,
         )
         started_at = self._loop.time()
-        next_p2p_heartbeat_at = started_at
         reason = ""
+        self._apply_p2p_heartbeat_trace(trace, snapshot_pre_cmd13=True)
         try:
             await self.send_without_wait(wire, cmd_id=13, timeout=min(timeout, 5.0))
             first = await asyncio.wait_for(
@@ -285,13 +381,6 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             )
 
             while True:
-                now = self._loop.time()
-                if now >= next_p2p_heartbeat_at:
-                    trace.p2p_heartbeat_attempted = True
-                    if self._send_p2p_heartbeat():
-                        trace.p2p_heartbeat_count += 1
-                    next_p2p_heartbeat_at = now + P2P_HEARTBEAT_INTERVAL
-
                 if trace.expected_size_reached:
                     reason = "expected_size_reached"
                     break
@@ -327,6 +416,7 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             trace.connection_lost_exception_present = (
                 protocol.connection_lost_exception_present
             )
+            self._apply_p2p_heartbeat_trace(trace)
             if not trace.termination_reason:
                 trace.termination_reason = reason or "collector_stopped"
             trace.elapsed_seconds = round(self._loop.time() - started_at, 3)
