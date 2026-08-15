@@ -114,6 +114,8 @@ class NotificationBridge:
         expected_device_name: str,
         uid: str,
         ingest_event,
+        *,
+        initial_event: CloudEvent | None = None,
     ) -> None:
         self._hass = hass
         self.entity_id = entity_id
@@ -127,6 +129,20 @@ class NotificationBridge:
         self.last_camera_mapped = False
         self.last_event_queued = False
         self.last_duplicate_rejected = False
+
+        # The queue is persistent while these fields are runtime telemetry.
+        # Restore the latest still-pending Android event on integration reload so
+        # diagnostics do not misleadingly return to an all-null state.
+        if initial_event is not None and initial_event.source == "android_notification":
+            self.last_reolink_notification_time = (
+                initial_event.notification_post_time or initial_event.alarm_time
+            )
+            self.last_reolink_notification_camera = (
+                initial_event.device_name or expected_device_name
+            )
+            self.last_event_matched = True
+            self.last_camera_mapped = bool(self.last_reolink_notification_camera)
+            self.last_event_queued = True
 
     @property
     def active(self) -> bool:
@@ -159,16 +175,14 @@ class NotificationBridge:
 
     async def async_process_attributes(self, attributes: Mapping[str, Any]) -> bool:
         """Match, normalize and persist one notification update."""
-        self.last_event_matched = False
-        self.last_camera_mapped = False
-        self.last_event_queued = False
-        self.last_duplicate_rejected = False
         event = notification_event_from_attributes(
             attributes,
             expected_device_name=self._expected_device_name,
             uid=self._uid,
         )
         if event is None:
+            # Last Notification is a phone-wide sensor. Unrelated app updates
+            # must not erase the last successfully matched Reolink telemetry.
             return False
 
         self.last_event_matched = True
