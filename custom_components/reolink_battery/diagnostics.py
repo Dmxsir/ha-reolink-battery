@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
+from .recording_download_probe import download_prepare_state
 from .recording_probe import probe_state
 
 
@@ -24,6 +25,7 @@ async def async_get_config_entry_diagnostics(
     coordinator = entry.runtime_data.coordinator
     bridge = entry.runtime_data.notification_bridge
     recording = probe_state(entry.entry_id)
+    prepare = download_prepare_state(entry.entry_id)
     return {
         "device": {
             "model": entry.data.get(CONF_MODEL, ""),
@@ -98,7 +100,32 @@ async def async_get_config_entry_diagnostics(
             "failure_stage": recording.failure_stage or None,
             "download_attempted": False,
         },
-        "milestone": "3B.2a",
+        "download_prepare": {
+            "manual_only": True,
+            "attempted": prepare.attempted,
+            "success": prepare.success,
+            "event_time": (
+                prepare.event_time.isoformat() if prepare.event_time else None
+            ),
+            "candidate_start": (
+                prepare.candidate_start.isoformat()
+                if prepare.candidate_start
+                else None
+            ),
+            "candidate_end": (
+                prepare.candidate_end.isoformat()
+                if prepare.candidate_end
+                else None
+            ),
+            "candidate_distance_seconds": prepare.candidate_distance_seconds,
+            "response_present": prepare.response_present,
+            "handle_present": prepare.handle_present,
+            "expected_size": prepare.expected_size,
+            "response_file_name_present": prepare.response_file_name_present,
+            "failure_stage": prepare.failure_stage or None,
+            "media_transfer_attempted": False,
+        },
+        "milestone": "3B.2b-prep",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
