@@ -1,0 +1,265 @@
+name: Publish beta25 event-only media handoff
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta25-event-media.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Remove integration-owned Telegram delivery
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          const = Path('custom_components/reolink_battery/const.py')
+          text = const.read_text()
+          text = text.replace('CONF_TELEGRAM_NOTIFY_ENTITY = "telegram_notify_entity"\n', '')
+          const.write_text(text)
+
+          flow = Path('custom_components/reolink_battery/config_flow.py')
+          text = flow.read_text()
+          text = text.replace('    CONF_TELEGRAM_NOTIFY_ENTITY,\n', '')
+          text = text.replace(
+              '        vol.Optional(CONF_TELEGRAM_NOTIFY_ENTITY): EntitySelector(\n'
+              '            EntitySelectorConfig(domain="notify")\n'
+              '        ),\n',
+              ''
+          )
+          flow.write_text(text)
+
+          worker = Path('custom_components/reolink_battery/recording_worker.py')
+          text = worker.read_text()
+          text = text.replace('    CONF_TELEGRAM_NOTIFY_ENTITY,\n', '')
+          for line in (
+              '    telegram_configured: bool = False\n',
+              '    telegram_send_attempted: bool = False\n',
+              '    telegram_send_succeeded: bool = False\n',
+              '    telegram_path_allowed: bool | None = None\n',
+              '    telegram_service_available: bool | None = None\n',
+              '    telegram_last_failure_stage: str = ""\n',
+              '    telegram_last_failure_type: str = ""\n',
+              '    telegram_last_send_time: datetime | None = None\n',
+          ):
+              text = text.replace(line, '')
+          start = text.find('    async def _async_send_telegram(')
+          end = text.find('    async def _process_once(', start)
+          if start == -1 or end == -1:
+              raise SystemExit('beta25 Telegram method boundaries not found')
+          text = text[:start] + text[end:]
+          text = text.replace(
+              '    waiting_camera_closed: bool = False\n',
+              '    waiting_camera_closed: bool = False\n'
+              '    last_media_source_id: str = ""\n'
+              '    last_media_content_id_present: bool = False\n'
+          )
+          old_output = '        output_dir = Path(self._hass.config.path("reolink_battery", "recordings"))\n'
+          new_output = (
+              '        media_dirs = self._hass.config.media_dirs\n'
+              '        if not media_dirs:\n'
+              '            self.state.last_failure_stage = "MEDIA_DIRECTORY_UNAVAILABLE"\n'
+              '            return False\n'
+              '        media_source_id = "local" if "local" in media_dirs else next(iter(media_dirs))\n'
+              '        output_dir = Path(media_dirs[media_source_id]) / "reolink_battery"\n'
+              '        self.state.last_media_source_id = media_source_id\n'
+              '        self.state.last_media_content_id_present = False\n'
+          )
+          if old_output not in text:
+              raise SystemExit('beta25 old output directory line not found')
+          text = text.replace(old_output, new_output, 1)
+          event_needle = (
+              '        self._hass.bus.async_fire(\n'
+              '            RECORDING_READY_EVENT,\n'
+              '            {\n'
+          )
+          if event_needle not in text:
+              raise SystemExit('beta25 ready event insertion point not found')
+          text = text.replace(
+              event_needle,
+              '        media_content_id = (\n'
+              '            f"media-source://media_source/{media_source_id}/"\n'
+              '            f"reolink_battery/{final_path.name}"\n'
+              '        )\n'
+              '        self.state.last_media_content_id_present = True\n\n'
+              + event_needle,
+              1,
+          )
+          text = text.replace(
+              '                "file_path": str(final_path),\n'
+              '                "file_size": expected_size,\n',
+              '                "file_path": str(final_path),\n'
+              '                "media_content_id": media_content_id,\n'
+              '                "file_size": expected_size,\n',
+              1,
+          )
+          text = text.replace('        await self._async_send_telegram(final_path, event)\n', '')
+          worker.write_text(text)
+          PY
+
+      - name: Wire event-only Media diagnostics and translations
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          diag = Path('custom_components/reolink_battery/diagnostics.py')
+          text = diag.read_text()
+          for fragment in (
+              '            "telegram_configured": bool(worker and worker.state.telegram_configured),\n',
+              '            "telegram_send_attempted": bool(worker and worker.state.telegram_send_attempted),\n',
+              '            "telegram_send_succeeded": bool(worker and worker.state.telegram_send_succeeded),\n',
+              '            "telegram_path_allowed": worker.state.telegram_path_allowed if worker else None,\n',
+              '            "telegram_service_available": worker.state.telegram_service_available if worker else None,\n',
+              '            "telegram_last_failure_stage": (worker.state.telegram_last_failure_stage or None) if worker else None,\n',
+              '            "telegram_last_failure_type": (worker.state.telegram_last_failure_type or None) if worker else None,\n',
+          ):
+              text = text.replace(fragment, '')
+          start = text.find('            "telegram_last_send_time": (')
+          if start != -1:
+              end = text.find('            "raw_path_exposed": False,', start)
+              if end == -1:
+                  raise SystemExit('beta25 diagnostics Telegram block end not found')
+              text = text[:start] + text[end:]
+          text = text.replace(
+              '            "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),\n',
+              '            "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),\n'
+              '            "last_media_source_id": (worker.state.last_media_source_id or None) if worker else None,\n'
+              '            "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),\n',
+              1,
+          )
+          text = text.replace(
+              '"milestone": "3B.4-telegram-delivery"',
+              '"milestone": "3B.5-event-only-media-handoff"'
+          )
+          diag.write_text(text)
+
+          updates = {
+              'custom_components/reolink_battery/strings.json': (
+                  'Motion notification bridge',
+                  'Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Recording delivery is intentionally left to Home Assistant automations.'
+              ),
+              'custom_components/reolink_battery/translations/en.json': (
+                  'Motion notification bridge',
+                  'Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Recording delivery is intentionally left to Home Assistant automations.'
+              ),
+              'custom_components/reolink_battery/translations/he.json': (
+                  'גשר התראות תנועה',
+                  'ניתן לבחור את חיישן Last Notification של אפליקציית Home Assistant Companion בטלפון Android שמקבל את התראות Reolink. הטיפול בהקלטה לאחר ההורדה נשאר בכוונה לאוטומציות של Home Assistant.'
+              ),
+          }
+          for file_name, (title, description) in updates.items():
+              p = Path(file_name)
+              data = json.loads(p.read_text())
+              step = data['options']['step']['init']
+              step['title'] = title
+              step['description'] = description
+              step.setdefault('data', {}).pop('telegram_notify_entity', None)
+              step.setdefault('data_description', {}).pop('telegram_notify_entity', None)
+              p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+          PY
+
+      - name: Bump manifest
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('custom_components/reolink_battery/manifest.json')
+          data = json.loads(p.read_text())
+          data['version'] = '0.1.2-beta.25'
+          p.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+      - name: Install protocol dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe tests.test_recording_download_beta12
+
+      - name: Validate JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path('custom_components/reolink_battery').rglob('*.json'):
+              json.loads(path.read_text())
+          PY
+
+      - name: Static event-only Media invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          worker = Path('custom_components/reolink_battery/recording_worker.py').read_text()
+          flow = Path('custom_components/reolink_battery/config_flow.py').read_text()
+          const = Path('custom_components/reolink_battery/const.py').read_text()
+          diag = Path('custom_components/reolink_battery/diagnostics.py').read_text()
+          required = [
+              'RECORDING_SETTLE_SECONDS = 60.0',
+              'async with self._entry.runtime_data.local_operation_lock',
+              'async_complete_event(event.event_id)',
+              'RECORDING_READY_EVENT',
+              'self._hass.config.media_dirs',
+              'Path(media_dirs[media_source_id]) / "reolink_battery"',
+              '"media_content_id": media_content_id',
+              'media-source://media_source/',
+          ]
+          missing = [item for item in required if item not in worker]
+          if missing:
+              raise SystemExit(f'missing beta25 invariants: {missing}')
+          forbidden = ['telegram_bot', '_async_send_telegram', 'CONF_TELEGRAM_NOTIFY_ENTITY']
+          bad = [item for item in forbidden if item in worker or item in flow or item in const]
+          if bad:
+              raise SystemExit(f'beta25 still owns Telegram delivery: {bad}')
+          if 'last_media_content_id_present' not in diag:
+              raise SystemExit('missing Media handoff diagnostics')
+          if '3B.5-event-only-media-handoff' not in diag:
+              raise SystemExit('wrong beta25 milestone')
+          PY
+
+      - name: Commit beta25 wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/const.py \
+                  custom_components/reolink_battery/config_flow.py \
+                  custom_components/reolink_battery/recording_worker.py \
+                  custom_components/reolink_battery/diagnostics.py \
+                  custom_components/reolink_battery/strings.json \
+                  custom_components/reolink_battery/translations/en.json \
+                  custom_components/reolink_battery/translations/he.json \
+                  custom_components/reolink_battery/manifest.json
+          git diff --cached --quiet || git commit -m "Move verified recordings to HA Media and hand off by event"
+          git push origin HEAD:feature/recording-worker-3b2
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f v0.1.2-beta.25
+          git push -f origin v0.1.2-beta.25
+          gh release delete v0.1.2-beta.25 --yes >/dev/null 2>&1 || true
+          gh release create v0.1.2-beta.25 \
+            --title "Reolink Battery v0.1.2-beta.25" \
+            --prerelease \
+            --target "$(git rev-parse HEAD)" \
+            --notes "Milestone 3B.5 event-only Media handoff. Removes Telegram-specific configuration and delivery from the integration. Verified recordings are now written under Home Assistant's configured local Media directory (normally /media/reolink_battery on HAOS), which Home Assistant automatically allows as an external file source. After durable MP4 verification and queue completion, the integration fires reolink_battery_recording_ready with both file_path and media_content_id. Delivery to Telegram or any other destination is intentionally delegated to normal Home Assistant automations. Camera-close settling, bounded retry behavior, cmd13 -> handle-bound cmd8 full-high/mainStream download, atomic MP4 persistence, and per-camera locking are unchanged."
