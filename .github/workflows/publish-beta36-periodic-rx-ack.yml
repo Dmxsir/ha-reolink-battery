@@ -1,0 +1,267 @@
+name: Publish beta.36 periodic RX ACK
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta36-periodic-rx-ack.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/recording-worker-3b2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'reolink-aio==0.21.8' 'pycryptodomex==3.23.0'
+
+      - name: Patch beta.36 periodic RX ACK
+        shell: bash
+        run: |
+          set -euo pipefail
+          BETA21_BEFORE="$(sha256sum custom_components/reolink_battery/recording_download_probe_beta21.py | awk '{print $1}')"
+          WORKER_BEFORE="$(sha256sum custom_components/reolink_battery/recording_worker.py | awk '{print $1}')"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if text.count(old) != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, got {text.count(old)}")
+              return text.replace(old, new, 1)
+
+          root = Path('.')
+          beta20_path = root / 'custom_components/reolink_battery/recording_download_probe_beta20.py'
+          beta20 = beta20_path.read_text()
+
+          beta20 = replace_once(
+              beta20,
+              'P2P_HEARTBEAT_INTERVAL = 1.0\nRELIABLE_UDP_ACK_TIMEOUT = 0.5\n',
+              'P2P_HEARTBEAT_INTERVAL = 1.0\nPERIODIC_RX_ACK_INTERVAL = 0.010\nRELIABLE_UDP_ACK_TIMEOUT = 0.5\n',
+              'constant insertion',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '    udp_max_gap_recovery_ms: float | None = None\n\n\n@dataclass(frozen=True, slots=True)\n',
+              '    udp_max_gap_recovery_ms: float | None = None\n'
+              '    udp_periodic_ack_started: bool = False\n'
+              '    udp_periodic_ack_interval_ms: float = 0.0\n'
+              '    udp_periodic_ack_count: int = 0\n'
+              '    udp_periodic_ack_gap_count: int = 0\n\n\n'
+              '@dataclass(frozen=True, slots=True)\n',
+              'trace fields',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '        self.udp_max_gap_recovery_ms: float | None = None\n'
+              '        self._missing_seq_ids_seen: set[int] = set()\n',
+              '        self.udp_max_gap_recovery_ms: float | None = None\n'
+              '        self.udp_periodic_ack_started = False\n'
+              '        self.udp_periodic_ack_interval_ms = 0.0\n'
+              '        self.udp_periodic_ack_count = 0\n'
+              '        self.udp_periodic_ack_gap_count = 0\n'
+              '        self._missing_seq_ids_seen: set[int] = set()\n',
+              'protocol counters',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '        if will_send:\n'
+              '            self.udp_ack_sent_count += 1\n'
+              '            if gap_bitmap:\n'
+              '                self.udp_ack_with_gap_bitmap_count += 1\n\n'
+              '    def parse_udp_connection(self, port: int) -> None:\n',
+              '        if will_send:\n'
+              '            self.udp_ack_sent_count += 1\n'
+              '            if gap_bitmap:\n'
+              '                self.udp_ack_with_gap_bitmap_count += 1\n\n'
+              '    def send_periodic_ack(self) -> bool:\n'
+              '        """Repeat the existing reolink-aio ACK state without changing its wire format."""\n'
+              '        will_send = (\n'
+              '            self._transport is not None\n'
+              '            and self.host_id is not None\n'
+              '            and self._recv_seq_id >= 0\n'
+              '        )\n'
+              '        if not will_send:\n'
+              '            return False\n'
+              '        gap_active = bool(self._seq_data)\n'
+              '        before = self.udp_ack_sent_count\n'
+              '        self.send_ack()\n'
+              '        if self.udp_ack_sent_count <= before:\n'
+              '            return False\n'
+              '        self.udp_periodic_ack_count += 1\n'
+              '        if gap_active:\n'
+              '            self.udp_periodic_ack_gap_count += 1\n'
+              '        return True\n\n'
+              '    def parse_udp_connection(self, port: int) -> None:\n',
+              'periodic protocol method',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '        self._p2p_heartbeat_started_after_handoff = False\n'
+              '        self._reliable_ack_waiters: dict[int, asyncio.Future[bool]] = {}\n',
+              '        self._p2p_heartbeat_started_after_handoff = False\n'
+              '        self._periodic_rx_ack_task: asyncio.Task[None] | None = None\n'
+              '        self._reliable_ack_waiters: dict[int, asyncio.Future[bool]] = {}\n',
+              'connection task field',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '            trace.udp_max_gap_recovery_ms = snapshot_protocol.udp_max_gap_recovery_ms\n\n'
+              '    def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:\n',
+              '            trace.udp_max_gap_recovery_ms = snapshot_protocol.udp_max_gap_recovery_ms\n'
+              '            trace.udp_periodic_ack_started = snapshot_protocol.udp_periodic_ack_started\n'
+              '            trace.udp_periodic_ack_interval_ms = (\n'
+              '                snapshot_protocol.udp_periodic_ack_interval_ms\n'
+              '            )\n'
+              '            trace.udp_periodic_ack_count = snapshot_protocol.udp_periodic_ack_count\n'
+              '            trace.udp_periodic_ack_gap_count = (\n'
+              '                snapshot_protocol.udp_periodic_ack_gap_count\n'
+              '            )\n\n'
+              '    def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:\n',
+              'trace snapshot fields',
+          )
+
+          periodic_methods = '''    async def _periodic_rx_ack_loop(self) -> None:\n        """Repeat the current receive ACK state at the official-client cadence."""\n        try:\n            while self.connection_open:\n                await asyncio.sleep(PERIODIC_RX_ACK_INTERVAL)\n                if not self.connection_open:\n                    break\n                protocol = self._protocol\n                if not isinstance(protocol, _P2PHeartbeatProbeProtocol):\n                    break\n                try:\n                    protocol.send_periodic_ack()\n                except (OSError, RuntimeError):\n                    break\n        except asyncio.CancelledError:\n            raise\n\n    def _start_periodic_rx_ack_loop(self) -> None:\n        """Start exactly one 10 ms receive-ACK repeater for the active UDP session."""\n        task = self._periodic_rx_ack_task\n        if task is not None and not task.done():\n            return\n        protocol = self._protocol\n        if not isinstance(protocol, _P2PHeartbeatProbeProtocol):\n            return\n        protocol.udp_periodic_ack_started = True\n        protocol.udp_periodic_ack_interval_ms = round(\n            PERIODIC_RX_ACK_INTERVAL * 1000.0, 3\n        )\n        protocol.send_periodic_ack()\n        self._periodic_rx_ack_task = self._loop.create_task(\n            self._periodic_rx_ack_loop()\n        )\n\n    async def _stop_periodic_rx_ack_loop(self) -> None:\n        task = self._periodic_rx_ack_task\n        self._periodic_rx_ack_task = None\n        if task is None or task is asyncio.current_task():\n            return\n        task.cancel()\n        try:\n            await task\n        except asyncio.CancelledError:\n            pass\n\n'''
+          beta20 = replace_once(
+              beta20,
+              '    async def connect(self):\n',
+              periodic_methods + '    async def connect(self):\n',
+              'periodic task methods',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '    async def connect(self):\n'
+              '        """Open/adopt the session and start heartbeat before login/FileInfo."""\n'
+              '        await super().connect()\n'
+              '        self._start_p2p_heartbeat_loop()\n\n'
+              '    async def close(self) -> None:\n'
+              '        """Stop the sole heartbeat sender before closing the adopted session."""\n'
+              '        await self._stop_p2p_heartbeat_loop()\n'
+              '        await super().close()\n',
+              '    async def connect(self):\n'
+              '        """Open/adopt the session and start heartbeat plus periodic RX ACK."""\n'
+              '        await super().connect()\n'
+              '        self._start_p2p_heartbeat_loop()\n'
+              '        self._start_periodic_rx_ack_loop()\n\n'
+              '    async def close(self) -> None:\n'
+              '        """Stop background ACK/heartbeat senders before closing the session."""\n'
+              '        await self._stop_periodic_rx_ack_loop()\n'
+              '        await self._stop_p2p_heartbeat_loop()\n'
+              '        await super().close()\n',
+              'connect close lifecycle',
+          )
+
+          beta20_path.write_text(beta20)
+
+          diagnostics_path = root / 'custom_components/reolink_battery/diagnostics.py'
+          diagnostics = diagnostics_path.read_text()
+          diagnostics = replace_once(
+              diagnostics,
+              '                "udp_max_gap_recovery_ms": stream.udp_max_gap_recovery_ms,\n'
+              '                "remote_disconnect_observed": stream.remote_disconnect_observed,\n',
+              '                "udp_max_gap_recovery_ms": stream.udp_max_gap_recovery_ms,\n'
+              '                "udp_periodic_ack_started": stream.udp_periodic_ack_started,\n'
+              '                "udp_periodic_ack_interval_ms": (\n'
+              '                    stream.udp_periodic_ack_interval_ms\n'
+              '                ),\n'
+              '                "udp_periodic_ack_count": stream.udp_periodic_ack_count,\n'
+              '                "udp_periodic_ack_gap_count": (\n'
+              '                    stream.udp_periodic_ack_gap_count\n'
+              '                ),\n'
+              '                "remote_disconnect_observed": stream.remote_disconnect_observed,\n',
+              'diagnostic fields',
+          )
+          diagnostics = replace_once(
+              diagnostics,
+              '        "milestone": "3B.9-gap-recovery-telemetry",\n',
+              '        "milestone": "3B.10-periodic-rx-ack",\n',
+              'milestone',
+          )
+          diagnostics_path.write_text(diagnostics)
+
+          manifest_path = root / 'custom_components/reolink_battery/manifest.json'
+          manifest = manifest_path.read_text()
+          manifest = replace_once(
+              manifest,
+              '"version": "0.1.2-beta.35"',
+              '"version": "0.1.2-beta.36"',
+              'manifest version',
+          )
+          manifest_path.write_text(manifest)
+
+          test_path = root / 'tests/test_recording_download_beta36.py'
+          test_path.write_text('''"""Regression guards for beta.36 periodic receive ACK cadence."""\n\nfrom pathlib import Path\nimport unittest\n\nROOT = Path(__file__).parents[1]\nBETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"\nBETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"\nWORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"\nDIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"\n\n\nclass Beta36PeriodicRxAckTests(unittest.TestCase):\n    def test_periodic_ack_uses_existing_ack_encoder(self):\n        source = BETA20.read_text()\n        self.assertIn("PERIODIC_RX_ACK_INTERVAL = 0.010", source)\n        self.assertIn("def send_periodic_ack(self) -> bool:", source)\n        self.assertIn("self.send_ack()", source)\n        self.assertIn("await asyncio.sleep(PERIODIC_RX_ACK_INTERVAL)", source)\n        self.assertIn("protocol.send_periodic_ack()", source)\n\n    def test_periodic_ack_has_single_connection_lifetime_task(self):\n        source = BETA20.read_text()\n        self.assertIn("self._periodic_rx_ack_task: asyncio.Task[None] | None = None", source)\n        self.assertIn("self._start_periodic_rx_ack_loop()", source)\n        self.assertIn("await self._stop_periodic_rx_ack_loop()", source)\n\n    def test_existing_transport_contract_is_unchanged(self):\n        source = BETA20.read_text()\n        self.assertIn("P2P_HEARTBEAT_INTERVAL = 1.0", source)\n        self.assertIn("RELIABLE_UDP_ACK_TIMEOUT = 0.5", source)\n        self.assertIn("RELIABLE_UDP_MAX_RETRANSMITS = 2", source)\n        beta21 = BETA21.read_text()\n        self.assertIn("cmd8_wire, cmd_id=8, response_future=cmd8_delivery", beta21)\n        worker = WORKER.read_text()\n        self.assertIn("RECORDING_SETTLE_SECONDS = 60.0", worker)\n\n    def test_diagnostics_expose_periodic_ack_telemetry(self):\n        source = DIAGNOSTICS.read_text()\n        for token in (\n            "udp_periodic_ack_started",\n            "udp_periodic_ack_interval_ms",\n            "udp_periodic_ack_count",\n            "udp_periodic_ack_gap_count",\n            "3B.10-periodic-rx-ack",\n        ):\n            self.assertIn(token, source)\n\n\nif __name__ == "__main__":\n    unittest.main()\n''')
+          PY
+
+          test "$BETA21_BEFORE" = "$(sha256sum custom_components/reolink_battery/recording_download_probe_beta21.py | awk '{print $1}')"
+          test "$WORKER_BEFORE" = "$(sha256sum custom_components/reolink_battery/recording_worker.py | awk '{print $1}')"
+
+      - name: Verify beta.36 source
+        run: |
+          set -euo pipefail
+          grep -q '"version": "0.1.2-beta.36"' custom_components/reolink_battery/manifest.json
+          grep -q '3B.10-periodic-rx-ack' custom_components/reolink_battery/diagnostics.py
+          grep -q 'PERIODIC_RX_ACK_INTERVAL = 0.010' custom_components/reolink_battery/recording_download_probe_beta20.py
+          python -m compileall -q custom_components/reolink_battery
+          python tests/test_recording_download_beta36.py
+          python tests/test_recording_download_beta35.py
+          python tests/test_recording_download_beta34.py
+          python tests/test_recording_download_beta33.py
+          python tests/test_recording_download_beta32.py
+          python tests/test_recording_download_beta20.py
+          python tests/test_recording_download_probe.py
+          git diff --check
+
+      - name: Commit beta.36 source
+        id: source
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add custom_components/reolink_battery/recording_download_probe_beta20.py custom_components/reolink_battery/diagnostics.py custom_components/reolink_battery/manifest.json tests/test_recording_download_beta36.py
+          git commit -m 'Add beta.36 periodic receive ACK cadence'
+          git push origin HEAD:feature/recording-worker-3b2
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish beta.36 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git tag v0.1.2-beta.36 "$SOURCE_SHA"
+          git push origin v0.1.2-beta.36
+          gh release create v0.1.2-beta.36 \
+            --repo Dmxsir/ha-reolink-battery \
+            --target "$SOURCE_SHA" \
+            --prerelease \
+            --title 'v0.1.2-beta.36' \
+            --notes 'Milestone 3B.10 introduces one targeted receive-side reliability change on top of beta.35: while the adopted UDP/P2P session is open, the integration repeats the existing reolink-aio receive ACK state every 10 ms. The ACK wire encoder and bitmap semantics are intentionally unchanged; beta.36 only adds the official-client-style periodic ACK cadence documented by Neolink. Single-lease handoff, the sole 1-second C2D_HB sender, 0.5-second cmd13/cmd8 outbound ACK timeout, maximum two same-sequence retransmissions, handle-bound full-high/mainStream cmd8, worker retries, atomic verified MP4 persistence and Media/Telegram handoff are unchanged. New diagnostics report whether periodic ACK started, its 10 ms interval, total periodic ACKs and periodic ACKs sent while a receive gap was buffered. No cmd234, cmd9 or download framing change is introduced.'
+
+      - name: Remove temporary workflow
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/publish-beta36-periodic-rx-ack.yml
+          git commit -m 'Remove temporary beta36 publish workflow'
+          git push origin HEAD:feature/recording-worker-3b2
