@@ -202,6 +202,8 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.expected_size = None
         state.response_file_name_present = False
         state.failure_stage = ""
+        state.failure_type = ""
+        state.response_code = None
 
         try:
             async with self._entry.runtime_data.local_operation_lock:
@@ -215,6 +217,9 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
                 )
         except CameraStageError as err:
             state.failure_stage = err.stage
+            state.failure_type = getattr(err, "failure_type", "")
+            response_code = getattr(err, "response_code", None)
+            state.response_code = response_code if isinstance(response_code, int) else None
             raise HomeAssistantError(err.stage) from None
 
         state.success = True
