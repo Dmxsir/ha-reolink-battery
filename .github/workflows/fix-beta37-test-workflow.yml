@@ -1,0 +1,38 @@
+name: Fix beta37 generated test workflow
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/fix-beta37-test-workflow.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+      - name: Fix escaped test marker and remove fixer
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/publish-beta37-inclusive-rx-ack.yml')
+          text = path.read_text()
+          old = r'end = source.index("\n    def send_periodic_ack", start)'
+          new = 'end = source.index("    def send_periodic_ack", start)'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one beta37 test marker, got {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          Path('.github/workflows/fix-beta37-test-workflow.yml').unlink()
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A .github/workflows
+          git commit -m 'Fix beta37 generated test marker'
+          git push origin HEAD:feature/recording-worker-3b2
