@@ -1,0 +1,57 @@
+name: Publish beta.27 FileInfo resilience
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify beta.27 source
+        run: |
+          python -m compileall -q custom_components/reolink_battery
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("custom_components/reolink_battery/manifest.json").read_text())
+          assert manifest["version"] == "0.1.2-beta.27"
+
+          probe = Path("custom_components/reolink_battery/recording_probe.py").read_text()
+          assert "FILE_INFO_OPEN_RETRY_DELAYS_SECONDS = (1.5, 2.5)" in probe
+          assert "await asyncio.sleep(FILE_INFO_OPEN_RETRY_DELAYS_SECONDS[attempt])" in probe
+          assert "not getattr(connection, \"connection_open\", False)" in probe
+
+          worker = Path("custom_components/reolink_battery/recording_worker.py").read_text()
+          assert "reset_stream_probe_state(self._entry.entry_id)" in worker
+          assert "getattr(err, \"failure_type\", \"\")" in worker
+          assert "failure_type = f\"{failure_type}:rsp{response_code}\"" in worker
+          assert "RECORDING_SETTLE_SECONDS = 60.0" in worker
+          assert "MAX_ATTEMPTS_PER_TRIGGER = 3" in worker
+          PY
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v0.1.2-beta.27
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "v0.1.2-beta.27" \
+            --notes "Milestone 3B.5 FileInfo session-resilience follow-up. After a successful local wake and authentication, a transient cmd14 FileInfoList-open failure is now retried twice (1.5s then 2.5s) inside the same already-authenticated Baichuan session; no extra wake or reconnect is introduced by these retries, and retries stop immediately if that session is no longer open. Per-attempt download stream telemetry is reset before each worker attempt so an earlier partial cmd8 transfer cannot appear in diagnostics for a later pre-download failure. Worker failure telemetry now preserves the underlying protocol failure type and response code when available. Queue deferral, 60-second camera-closed settling, bounded outer retries, verified atomic MP4 persistence under Home Assistant Media, and reolink_battery_recording_ready handoff are unchanged."
