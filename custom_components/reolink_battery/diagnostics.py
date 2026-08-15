@@ -308,6 +308,9 @@ async def async_get_config_entry_diagnostics(
                 "udp_last_contiguous_seq": stream.udp_last_contiguous_seq,
                 "udp_max_ack_delay_ms": stream.udp_max_ack_delay_ms,
                 "udp_seq_at_remote_disconnect": stream.udp_seq_at_remote_disconnect,
+                "udp_snapshot_from_local_protocol": (
+                    stream.udp_snapshot_from_local_protocol
+                ),
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -381,7 +384,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.7-reliable-udp-retransmit",
+        "milestone": "3B.8-rx-telemetry-preserved",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

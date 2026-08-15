@@ -71,6 +71,7 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     udp_last_contiguous_seq: int | None = None
     udp_max_ack_delay_ms: float | None = None
     udp_seq_at_remote_disconnect: int | None = None
+    udp_snapshot_from_local_protocol: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,8 +416,17 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             self._reliable_ack_waiters.pop(seq_id, None)
         return seq_id
 
-    def _apply_udp_reliability_trace(self, trace: P2PHeartbeatProbeTrace) -> None:
-        """Copy command ACK and receive-gap telemetry into the public trace."""
+    def _apply_udp_reliability_trace(
+        self,
+        trace: P2PHeartbeatProbeTrace,
+        *,
+        protocol: _P2PHeartbeatProbeProtocol | None = None,
+    ) -> None:
+        """Copy command ACK and receive-gap telemetry into the public trace.
+
+        An explicit local protocol reference preserves RX counters after a remote
+        D2C_DISC closes the connection and clears self._protocol.
+        """
         cmd13_seq = self._reliable_command_seq.get(13)
         cmd8_seq = self._reliable_command_seq.get(8)
         trace.cmd13_udp_seq = cmd13_seq
@@ -441,18 +451,23 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         trace.cmd8_udp_retransmit_count = self._reliable_command_retransmits.get(8, 0)
         delays = list(self._reliable_ack_delays_ms.values())
         trace.udp_max_ack_delay_ms = max(delays) if delays else None
-        protocol = self._protocol
-        if isinstance(protocol, _P2PHeartbeatProbeProtocol):
-            trace.udp_bc_packets_received = protocol.udp_bc_packets_received
-            trace.udp_seq_gap_events = protocol.udp_seq_gap_events
-            trace.udp_missing_packet_count = protocol.udp_missing_packet_count
-            trace.udp_out_of_order_packets = protocol.udp_out_of_order_packets
-            trace.udp_duplicate_packets = protocol.udp_duplicate_packets
-            trace.udp_reorder_buffer_peak = protocol.udp_reorder_buffer_peak
-            trace.udp_ack_sent_count = protocol.udp_ack_sent_count
-            trace.udp_ack_with_gap_bitmap_count = protocol.udp_ack_with_gap_bitmap_count
-            trace.udp_last_contiguous_seq = protocol.udp_last_contiguous_seq
-            trace.udp_seq_at_remote_disconnect = protocol.udp_seq_at_remote_disconnect
+        snapshot_protocol = protocol
+        if snapshot_protocol is None:
+            current_protocol = self._protocol
+            if isinstance(current_protocol, _P2PHeartbeatProbeProtocol):
+                snapshot_protocol = current_protocol
+        trace.udp_snapshot_from_local_protocol = protocol is not None
+        if isinstance(snapshot_protocol, _P2PHeartbeatProbeProtocol):
+            trace.udp_bc_packets_received = snapshot_protocol.udp_bc_packets_received
+            trace.udp_seq_gap_events = snapshot_protocol.udp_seq_gap_events
+            trace.udp_missing_packet_count = snapshot_protocol.udp_missing_packet_count
+            trace.udp_out_of_order_packets = snapshot_protocol.udp_out_of_order_packets
+            trace.udp_duplicate_packets = snapshot_protocol.udp_duplicate_packets
+            trace.udp_reorder_buffer_peak = snapshot_protocol.udp_reorder_buffer_peak
+            trace.udp_ack_sent_count = snapshot_protocol.udp_ack_sent_count
+            trace.udp_ack_with_gap_bitmap_count = snapshot_protocol.udp_ack_with_gap_bitmap_count
+            trace.udp_last_contiguous_seq = snapshot_protocol.udp_last_contiguous_seq
+            trace.udp_seq_at_remote_disconnect = snapshot_protocol.udp_seq_at_remote_disconnect
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:
         packet, transaction_id = super()._construct_udp_mess(body)

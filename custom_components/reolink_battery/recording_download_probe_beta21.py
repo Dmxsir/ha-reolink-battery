@@ -282,7 +282,7 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
             trace.remote_disconnect_observed = protocol.remote_disconnect_observed
             trace.connection_lost_exception_present = protocol.connection_lost_exception_present
             self._apply_p2p_heartbeat_trace(trace)
-            self._apply_udp_reliability_trace(trace)
+            self._apply_udp_reliability_trace(trace, protocol=protocol)
             if not trace.termination_reason:
                 trace.termination_reason = reason or "collector_stopped"
             trace.elapsed_seconds = round(self._loop.time() - started_at, 3)
