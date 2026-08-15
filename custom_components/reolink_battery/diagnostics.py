@@ -18,10 +18,14 @@ def _redacted_uid(uid: str) -> str:
     return f"{uid[:3]}…{uid[-3:]}"
 
 
+def _hex_class(value: int | None) -> str | None:
+    return f"0x{value:04x}" if isinstance(value, int) else None
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> dict[str, Any]:
-    """Return no credentials, tokens, network addresses, or session material."""
+    """Return no credentials, tokens, network addresses, filenames, or session keys."""
     coordinator = entry.runtime_data.coordinator
     bridge = entry.runtime_data.notification_bridge
     recording = probe_state(entry.entry_id)
@@ -119,17 +123,28 @@ async def async_get_config_entry_diagnostics(
             ),
             "candidate_distance_seconds": prepare.candidate_distance_seconds,
             "response_present": prepare.response_present,
-            "handle_present": prepare.handle_present,
-            "expected_size": prepare.expected_size,
-            "response_file_name_present": prepare.response_file_name_present,
+            "response_accepted": prepare.response_accepted,
             "failure_stage": prepare.failure_stage or None,
             "failure_type": prepare.failure_type or None,
             "response_code": prepare.response_code,
-            "header_channel_id": 7,
-            "message_id_forced": False,
-            "media_transfer_attempted": False,
+            "request_channel_id": prepare.request_channel_id,
+            "request_stream_type": prepare.request_stream_type,
+            "request_msg_num": prepare.request_msg_num,
+            "request_message_class": _hex_class(prepare.request_message_class),
+            "request_body_length": prepare.request_body_length,
+            "request_payload_offset": prepare.request_payload_offset,
+            "response_message_class": _hex_class(prepare.response_message_class),
+            "response_channel_id": prepare.response_channel_id,
+            "response_stream_type": prepare.response_stream_type,
+            "response_msg_num": prepare.response_msg_num,
+            "response_body_length": prepare.response_body_length,
+            "response_payload_offset": prepare.response_payload_offset,
+            "first_payload_length": prepare.first_payload_length,
+            "media_payload_observed": prepare.first_payload_length > 0,
+            "full_media_download_attempted": False,
+            "cmd8_attempted": False,
         },
-        "milestone": "3B.2b-prep",
+        "milestone": "3B.2b-frame-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
