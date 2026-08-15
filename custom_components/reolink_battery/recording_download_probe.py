@@ -22,6 +22,7 @@ from .recording_probe import (
     FILE_INFO_HEADER_CHANNEL_ID,
     FileInfoListError,
     FileInfoTrace,
+    RecordingCandidate,
     _list_recordings_file_info,
     select_recording_candidate,
 )
@@ -76,6 +77,34 @@ class Cmd13RequestMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordingIdentityTrace:
+    """Secret-safe shape of the exact FileInfo identity used for cmd13."""
+
+    id_present: bool
+    file_name_present: bool
+    name_present: bool
+    id_length: int
+    file_name_length: int
+    name_length: int
+    id_equals_file_name: bool | None
+    id_equals_name: bool | None
+    file_name_equals_name: bool | None
+    id_looks_like_path: bool
+    file_name_looks_like_path: bool
+    xml_channel_id_present: bool
+    xml_channel_id_value: int | None
+    stream_type_present: bool
+    stream_type_value: str | None
+    file_type_present: bool
+    file_type_value: str | None
+    record_type_present: bool
+    record_type_value: str | None
+    used_exact_id: bool
+    used_exact_file_name: bool
+    used_exact_name: bool
+
+
+@dataclass(frozen=True, slots=True)
 class DownloadPrepareResult:
     """Secret-safe result after sending one correctly framed cmd13 request."""
 
@@ -86,6 +115,7 @@ class DownloadPrepareResult:
     response: FileDownloadFrameMetadata
     response_accepted: bool
     file_info_trace: FileInfoTrace
+    identity_trace: RecordingIdentityTrace
 
 
 @dataclass(slots=True)
@@ -132,6 +162,28 @@ class DownloadPrepareState:
     file_info_close_succeeded: bool = False
     file_info_close_failure_type: str = ""
     file_info_close_response_code: int | None = None
+    identity_id_present: bool = False
+    identity_file_name_present: bool = False
+    identity_name_present: bool = False
+    identity_id_length: int = 0
+    identity_file_name_length: int = 0
+    identity_name_length: int = 0
+    identity_id_equals_file_name: bool | None = None
+    identity_id_equals_name: bool | None = None
+    identity_file_name_equals_name: bool | None = None
+    identity_id_looks_like_path: bool = False
+    identity_file_name_looks_like_path: bool = False
+    identity_xml_channel_id_present: bool = False
+    identity_xml_channel_id_value: int | None = None
+    identity_stream_type_present: bool = False
+    identity_stream_type_value: str | None = None
+    identity_file_type_present: bool = False
+    identity_file_type_value: str | None = None
+    identity_record_type_present: bool = False
+    identity_record_type_value: str | None = None
+    identity_used_exact_id: bool = False
+    identity_used_exact_file_name: bool = False
+    identity_used_exact_name: bool = False
 
 
 _STATES: dict[str, DownloadPrepareState] = {}
@@ -164,17 +216,107 @@ def apply_file_info_trace(state: DownloadPrepareState, trace: FileInfoTrace | No
     state.file_info_close_response_code = trace.close_response_code
 
 
-def _download_xml(uid: str, file_name: str) -> str:
-    """Keep the proven FileInfoList download body unchanged."""
-    basename = os.path.basename(file_name.replace("\\", "/")) or file_name
+def apply_identity_trace(
+    state: DownloadPrepareState, trace: RecordingIdentityTrace | None
+) -> None:
+    """Copy only non-identifying FileInfo identity shape into diagnostics state."""
+    if trace is None:
+        return
+    state.identity_id_present = trace.id_present
+    state.identity_file_name_present = trace.file_name_present
+    state.identity_name_present = trace.name_present
+    state.identity_id_length = trace.id_length
+    state.identity_file_name_length = trace.file_name_length
+    state.identity_name_length = trace.name_length
+    state.identity_id_equals_file_name = trace.id_equals_file_name
+    state.identity_id_equals_name = trace.id_equals_name
+    state.identity_file_name_equals_name = trace.file_name_equals_name
+    state.identity_id_looks_like_path = trace.id_looks_like_path
+    state.identity_file_name_looks_like_path = trace.file_name_looks_like_path
+    state.identity_xml_channel_id_present = trace.xml_channel_id_present
+    state.identity_xml_channel_id_value = trace.xml_channel_id_value
+    state.identity_stream_type_present = trace.stream_type_present
+    state.identity_stream_type_value = trace.stream_type_value
+    state.identity_file_type_present = trace.file_type_present
+    state.identity_file_type_value = trace.file_type_value
+    state.identity_record_type_present = trace.record_type_present
+    state.identity_record_type_value = trace.record_type_value
+    state.identity_used_exact_id = trace.used_exact_id
+    state.identity_used_exact_file_name = trace.used_exact_file_name
+    state.identity_used_exact_name = trace.used_exact_name
+
+
+def _eq_if_present(left: str, right: str) -> bool | None:
+    return left == right if left and right else None
+
+
+def _looks_like_path(value: str) -> bool:
+    return bool(value) and ("/" in value or "\\" in value)
+
+
+def _resolve_download_identity(
+    candidate: RecordingCandidate,
+) -> tuple[int, str, str, str, RecordingIdentityTrace]:
+    """Resolve cmd13 fields while preserving exact FileInfo values when available."""
+    exact_id = candidate.record_id
+    exact_file_name = candidate.xml_file_name
+    exact_name = candidate.display_name
+
+    record_id = exact_id or candidate.file_name
+    file_name = exact_file_name or candidate.file_name
+    display_name = (
+        exact_name
+        or os.path.basename(file_name.replace("\\", "/"))
+        or file_name
+    )
+
+    raw_channel = candidate.channel_id
+    xml_channel_id = raw_channel if isinstance(raw_channel, int) and 0 <= raw_channel <= 255 else 0
+
+    trace = RecordingIdentityTrace(
+        id_present=bool(exact_id),
+        file_name_present=bool(exact_file_name),
+        name_present=bool(exact_name),
+        id_length=len(exact_id),
+        file_name_length=len(exact_file_name),
+        name_length=len(exact_name),
+        id_equals_file_name=_eq_if_present(exact_id, exact_file_name),
+        id_equals_name=_eq_if_present(exact_id, exact_name),
+        file_name_equals_name=_eq_if_present(exact_file_name, exact_name),
+        id_looks_like_path=_looks_like_path(exact_id),
+        file_name_looks_like_path=_looks_like_path(exact_file_name),
+        xml_channel_id_present=raw_channel is not None,
+        xml_channel_id_value=raw_channel if isinstance(raw_channel, int) else None,
+        stream_type_present=bool(candidate.stream_type),
+        stream_type_value=candidate.stream_type or None,
+        file_type_present=bool(candidate.file_type),
+        file_type_value=candidate.file_type or None,
+        record_type_present=bool(candidate.record_type),
+        record_type_value=candidate.record_type or None,
+        used_exact_id=bool(exact_id),
+        used_exact_file_name=bool(exact_file_name),
+        used_exact_name=bool(exact_name),
+    )
+    return xml_channel_id, record_id, file_name, display_name, trace
+
+
+def _download_xml(
+    uid: str,
+    *,
+    channel_id: int,
+    record_id: str,
+    file_name: str,
+    display_name: str,
+) -> str:
+    """Build FileInfoList download body from the exact FileInfo identity."""
     return (
         '<?xml version="1.0" encoding="UTF-8" ?>\n'
         '<body>\n<FileInfoList version="1.1">\n<FileInfo>\n'
-        '<channelId>0</channelId>\n'
+        f'<channelId>{channel_id}</channelId>\n'
         f'<uid>{escape(uid)}</uid>\n'
         f'<fileName>{escape(file_name)}</fileName>\n'
-        f'<name>{escape(basename)}</name>\n'
-        f'<Id>{escape(file_name)}</Id>\n'
+        f'<name>{escape(display_name)}</name>\n'
+        f'<Id>{escape(record_id)}</Id>\n'
         '</FileInfo>\n</FileInfoList>\n</body>'
     )
 
@@ -199,11 +341,22 @@ def _next_download_msg_num(baichuan: Any) -> int:
 
 
 def _build_cmd13_wire(
-    baichuan: Any, uid: str, file_name: str
-) -> tuple[bytes, Cmd13RequestMetadata]:
-    """Build cmd13 as channelId + streamType + msgNum16, with channelId 7."""
+    baichuan: Any,
+    uid: str,
+    candidate: RecordingCandidate,
+) -> tuple[bytes, Cmd13RequestMetadata, RecordingIdentityTrace]:
+    """Build cmd13 with beta.8 framing and exact selected FileInfo identity."""
+    xml_channel_id, record_id, file_name, display_name, identity_trace = (
+        _resolve_download_identity(candidate)
+    )
     extension = _binary_extension_xml().encode("utf-8")
-    payload = _download_xml(uid, file_name).encode("utf-8")
+    payload = _download_xml(
+        uid,
+        channel_id=xml_channel_id,
+        record_id=record_id,
+        file_name=file_name,
+        display_name=display_name,
+    ).encode("utf-8")
     encrypted_extension = baichuan._aes_encrypt(extension)
     encrypted_payload = baichuan._aes_encrypt(payload)
     body = encrypted_extension + encrypted_payload
@@ -221,13 +374,17 @@ def _build_cmd13_wire(
         + FILE_DOWNLOAD_MESSAGE_CLASS.to_bytes(2, "little")
         + payload_offset.to_bytes(4, "little")
     )
-    return header + body, Cmd13RequestMetadata(
-        header_channel_id=DOWNLOAD_HEADER_CHANNEL_ID,
-        stream_type=DOWNLOAD_STREAM_TYPE,
-        msg_num=msg_num,
-        message_class=FILE_DOWNLOAD_MESSAGE_CLASS,
-        body_length=len(body),
-        payload_offset=payload_offset,
+    return (
+        header + body,
+        Cmd13RequestMetadata(
+            header_channel_id=DOWNLOAD_HEADER_CHANNEL_ID,
+            stream_type=DOWNLOAD_STREAM_TYPE,
+            msg_num=msg_num,
+            message_class=FILE_DOWNLOAD_MESSAGE_CLASS,
+            body_length=len(body),
+            payload_offset=payload_offset,
+        ),
+        identity_trace,
     )
 
 
@@ -242,7 +399,7 @@ async def async_prepare_download_for_event(
     resolve_timeout: float = 10.0,
     command_timeout: int = 30,
 ) -> DownloadPrepareResult:
-    """Find the event recording, send one cmd13 routing probe, then close."""
+    """Find the event recording, send one exact-identity cmd13 probe, then close."""
     lease = None
     host = None
     connection = None
@@ -312,7 +469,7 @@ async def async_prepare_download_for_event(
             )
 
         failure_stage = "DOWNLOAD_PREPARE_FRAME_ERROR"
-        wire, request = _build_cmd13_wire(host.baichuan, uid, candidate.file_name)
+        wire, request, identity_trace = _build_cmd13_wire(host.baichuan, uid, candidate)
         try:
             response = await connection.send_file_download_probe(
                 wire,
@@ -341,6 +498,7 @@ async def async_prepare_download_for_event(
             response_accepted=response.response_code
             in ACCEPTED_PREPARE_RESPONSE_CODES,
             file_info_trace=file_info_trace,
+            identity_trace=identity_trace,
         )
     except CameraStageError:
         raise
