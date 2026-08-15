@@ -88,6 +88,8 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     udp_ack_inclusive_highest_enabled: bool = False
     udp_ack_inclusive_highest_count: int = 0
     udp_current_missing_packet_count_at_disconnect: int = 0
+    udp_periodic_only_ack_enabled: bool = False
+    udp_immediate_ack_suppressed_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +218,8 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         self.udp_ack_inclusive_highest_enabled = True
         self.udp_ack_inclusive_highest_count = 0
         self.udp_current_missing_packet_count_at_disconnect = 0
+        self.udp_periodic_only_ack_enabled = True
+        self.udp_immediate_ack_suppressed_count = 0
         self._missing_seq_ids_seen: set[int] = set()
         self._recovered_missing_seq_ids: set[int] = set()
         self._missing_seq_first_seen_at: dict[int, float] = {}
@@ -328,14 +332,14 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
                 self._recv_seq_id if self._recv_seq_id >= 0 else None
             )
 
-    def send_ack(self) -> None:
-        """Send the RX ACK bitmap through the highest buffered sequence ID."""
+    def _send_ack_now(self) -> bool:
+        """Transmit one inclusive-highest RX ACK snapshot."""
         if (
             self._transport is None
             or self.host_id is None
             or self._recv_seq_id < 0
         ):
-            return
+            return False
 
         payload = bytearray()
         highest: int | None = None
@@ -364,9 +368,15 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
             self.udp_ack_with_gap_bitmap_count += 1
         if highest is not None:
             self.udp_ack_inclusive_highest_count += 1
+        return True
+
+    def send_ack(self) -> None:
+        """Coalesce per-packet ACK requests into the 10 ms periodic sender."""
+        if self._recv_seq_id >= 0:
+            self.udp_immediate_ack_suppressed_count += 1
 
     def send_periodic_ack(self) -> bool:
-        """Repeat the existing reolink-aio ACK state without changing its wire format."""
+        """Send the current receive ACK state at the official-client cadence."""
         will_send = (
             self._transport is not None
             and self.host_id is not None
@@ -375,9 +385,7 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         if not will_send:
             return False
         gap_active = bool(self._seq_data)
-        before = self.udp_ack_sent_count
-        self.send_ack()
-        if self.udp_ack_sent_count <= before:
+        if not self._send_ack_now():
             return False
         self.udp_periodic_ack_count += 1
         if gap_active:
@@ -631,6 +639,12 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             )
             trace.udp_current_missing_packet_count_at_disconnect = (
                 snapshot_protocol.udp_current_missing_packet_count_at_disconnect
+            )
+            trace.udp_periodic_only_ack_enabled = (
+                snapshot_protocol.udp_periodic_only_ack_enabled
+            )
+            trace.udp_immediate_ack_suppressed_count = (
+                snapshot_protocol.udp_immediate_ack_suppressed_count
             )
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:
