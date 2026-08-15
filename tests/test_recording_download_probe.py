@@ -33,60 +33,72 @@ class _FakeBaichuan:
 
 def _candidate(**overrides):
     values = {
-        "file_name": "record-identity",
+        "file_name": "/mnt/sda/a&b/test<1>.mp4",
         "start_time": datetime(2026, 8, 15, 10, 22, 54),
         "end_time": datetime(2026, 8, 15, 10, 23, 28),
         "size": 0,
         "distance_seconds": 4.792,
-        "record_id": "record-identity",
-        "xml_file_name": "/mnt/sda/a&b/test<1>.mp4",
-        "display_name": "test<1>.mp4",
+        # Exact beta.9 Argus shape: path-like Id, no fileName, short name.
+        "record_id": "/mnt/sda/a&b/test<1>.mp4",
+        "xml_file_name": "",
+        "display_name": "short-record-id",
         "channel_id": 0,
         "stream_type": "mainStream",
         "file_type": "mp4",
-        "record_type": "md",
+        "record_type": "io, md",
     }
     values.update(overrides)
     return recording_probe.RecordingCandidate(**values)
 
 
 class DownloadPrepareHelperTests(unittest.TestCase):
-    def test_download_xml_uses_exact_distinct_identity_fields(self):
+    def test_download_xml_keeps_distinct_fields(self):
         xml = probe._download_xml(
             "ABC123",
             channel_id=0,
-            record_id="record&identity",
+            record_id="short-record-id",
             file_name="/mnt/sda/a&b/test<1>.mp4",
-            display_name="test<1>.mp4",
+            display_name="short-record-id",
         )
         self.assertIn("<channelId>0</channelId>", xml)
         self.assertIn("<uid>ABC123</uid>", xml)
         self.assertIn("<fileName>/mnt/sda/a&amp;b/test&lt;1&gt;.mp4</fileName>", xml)
-        self.assertIn("<name>test&lt;1&gt;.mp4</name>", xml)
-        self.assertIn("<Id>record&amp;identity</Id>", xml)
+        self.assertIn("<name>short-record-id</name>", xml)
+        self.assertIn("<Id>short-record-id</Id>", xml)
 
-    def test_identity_trace_reports_shape_without_raw_values(self):
+    def test_argus_shape_remaps_name_to_id_and_path_id_to_filename(self):
         _, record_id, file_name, display_name, trace = probe._resolve_download_identity(
             _candidate()
         )
-        self.assertEqual(record_id, "record-identity")
+        self.assertEqual(record_id, "short-record-id")
         self.assertEqual(file_name, "/mnt/sda/a&b/test<1>.mp4")
-        self.assertEqual(display_name, "test<1>.mp4")
+        self.assertEqual(display_name, "short-record-id")
         self.assertTrue(trace.id_present)
-        self.assertTrue(trace.file_name_present)
+        self.assertFalse(trace.file_name_present)
         self.assertTrue(trace.name_present)
-        self.assertFalse(trace.id_equals_file_name)
-        self.assertFalse(trace.id_equals_name)
-        self.assertFalse(trace.file_name_equals_name)
-        self.assertFalse(trace.id_looks_like_path)
-        self.assertTrue(trace.file_name_looks_like_path)
+        self.assertTrue(trace.id_looks_like_path)
+        self.assertFalse(trace.file_name_looks_like_path)
         self.assertEqual(trace.xml_channel_id_value, 0)
         self.assertEqual(trace.stream_type_value, "mainStream")
         self.assertEqual(trace.file_type_value, "mp4")
-        self.assertEqual(trace.record_type_value, "md")
+        self.assertEqual(trace.record_type_value, "io, md")
         self.assertTrue(trace.used_exact_id)
-        self.assertTrue(trace.used_exact_file_name)
+        self.assertFalse(trace.used_exact_file_name)
         self.assertTrue(trace.used_exact_name)
+
+    def test_normal_shape_preserves_beta9_mapping(self):
+        candidate = _candidate(
+            record_id="record-identity",
+            xml_file_name="/mnt/sda/normal.mp4",
+            display_name="normal.mp4",
+            file_name="record-identity",
+        )
+        _, record_id, file_name, display_name, _ = probe._resolve_download_identity(
+            candidate
+        )
+        self.assertEqual(record_id, "record-identity")
+        self.assertEqual(file_name, "/mnt/sda/normal.mp4")
+        self.assertEqual(display_name, "normal.mp4")
 
     def test_identity_fallbacks_do_not_claim_exact_fields(self):
         candidate = _candidate(
@@ -140,16 +152,18 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         self.assertEqual(meta.message_class, 0x6482)
         self.assertEqual(baichuan._mess_id, 11)
         self.assertTrue(identity.used_exact_id)
+        self.assertTrue(identity.used_exact_name)
 
-    def test_cmd13_payload_contains_exact_fileinfo_values(self):
+    def test_cmd13_payload_contains_remapped_argus_values(self):
         baichuan = _FakeBaichuan(2)
         wire, meta, _ = probe._build_cmd13_wire(
             baichuan, "ABC123", _candidate()
         )
         payload = wire[24 + meta.payload_offset :].decode("utf-8")
-        self.assertIn("<Id>record-identity</Id>", payload)
+        self.assertIn("<Id>short-record-id</Id>", payload)
         self.assertIn("<fileName>/mnt/sda/a&amp;b/test&lt;1&gt;.mp4</fileName>", payload)
-        self.assertIn("<name>test&lt;1&gt;.mp4</name>", payload)
+        self.assertIn("<name>short-record-id</name>", payload)
+        self.assertNotIn("<Id>/mnt/sda/", payload)
 
     def test_msg_num_uses_full_16_bits(self):
         baichuan = _FakeBaichuan(0x1233)
@@ -182,6 +196,12 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         self.assertEqual(
             probe.ROUTING_LAYOUT,
             "file_download_ch_stream_msgnum16",
+        )
+
+    def test_identity_mapping_is_explicit(self):
+        self.assertEqual(
+            probe.IDENTITY_MAPPING,
+            "argus_name_to_id__id_to_file_name",
         )
 
     def test_known_prepare_response_codes_are_explicit(self):
@@ -243,11 +263,11 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         state = probe.DownloadPrepareState()
         probe.apply_identity_trace(state, trace)
         self.assertTrue(state.identity_id_present)
-        self.assertTrue(state.identity_file_name_present)
+        self.assertFalse(state.identity_file_name_present)
         self.assertTrue(state.identity_name_present)
         self.assertEqual(state.identity_stream_type_value, "mainStream")
         self.assertTrue(state.identity_used_exact_id)
-        self.assertTrue(state.identity_used_exact_file_name)
+        self.assertFalse(state.identity_used_exact_file_name)
         self.assertTrue(state.identity_used_exact_name)
 
 
