@@ -23,6 +23,7 @@ from .const import (
     DOMAIN,
 )
 from .recording_download_probe import (
+    apply_file_info_trace,
     async_prepare_download_for_event,
     download_prepare_state,
 )
@@ -215,6 +216,22 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.response_body_length = None
         state.response_payload_offset = None
         state.first_payload_length = 0
+        state.file_info_open_attempted = False
+        state.file_info_open_succeeded = False
+        state.file_info_open_failure_type = ""
+        state.file_info_open_response_code = None
+        state.file_info_handle_present = False
+        state.file_info_get_attempted = False
+        state.file_info_get_page_index = None
+        state.file_info_get_pages_succeeded = 0
+        state.file_info_get_failure_type = ""
+        state.file_info_get_response_code = None
+        state.file_info_last_page_file_count = None
+        state.file_info_finished_flag = None
+        state.file_info_close_attempted = False
+        state.file_info_close_succeeded = False
+        state.file_info_close_failure_type = ""
+        state.file_info_close_response_code = None
 
         try:
             async with self._entry.runtime_data.local_operation_lock:
@@ -231,8 +248,10 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
             state.failure_type = getattr(err, "failure_type", "")
             response_code = getattr(err, "response_code", None)
             state.response_code = response_code if isinstance(response_code, int) else None
+            apply_file_info_trace(state, getattr(err, "file_info_trace", None))
             raise HomeAssistantError(err.stage) from None
 
+        apply_file_info_trace(state, result.file_info_trace)
         state.candidate_start = result.candidate_start
         state.candidate_end = result.candidate_end
         state.candidate_distance_seconds = result.candidate_distance_seconds
