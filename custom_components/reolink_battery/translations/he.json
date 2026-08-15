@@ -48,6 +48,20 @@
       "unsupported_auth_path": "אבן דרך זו תומכת רק במסלול האישורים המקומיים שאומת."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "גשר התראות תנועה",
+        "description": "ניתן לבחור את חיישן Last Notification של אפליקציית Home Assistant Companion בטלפון Android שמקבל את התראות Reolink. ההאזנה מתבצעת בתוך Home Assistant בלבד ואינה פונה למצלמה ואינה מעירה אותה.",
+        "data": {
+          "notification_entity": "ישות מקור ההתראות"
+        },
+        "data_description": {
+          "notification_entity": "בחר את חיישן Last Notification של Companion App. השאר ריק כדי להשבית את גשר ההתראות."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "battery": {"name": "סוללה"},
