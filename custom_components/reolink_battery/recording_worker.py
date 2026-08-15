@@ -138,6 +138,7 @@ class RecordingWorker:
         from .recording_download_beta22 import (
             apply_stream_probe_trace,
             async_prepare_download_for_event,
+            reset_stream_probe_state,
         )
 
         self.state.attempts += 1
@@ -148,6 +149,10 @@ class RecordingWorker:
         self.state.last_file_saved = False
         self.state.last_file_size = 0
         self.state.last_ready_event_fired = False
+
+        # Do not let a previous partial cmd8 attempt leak into diagnostics for a
+        # later failure that occurs before cmd13/cmd8 (for example cmd14 open).
+        reset_stream_probe_state(self._entry.entry_id)
 
         media_dirs = self._hass.config.media_dirs
         if not media_dirs:
@@ -173,7 +178,11 @@ class RecordingWorker:
                 self._entry.entry_id, getattr(err, "stream_trace", None)
             )
             self.state.last_failure_stage = err.stage
-            self.state.last_failure_type = type(err).__name__
+            failure_type = str(getattr(err, "failure_type", "") or type(err).__name__)
+            response_code = getattr(err, "response_code", None)
+            if isinstance(response_code, int):
+                failure_type = f"{failure_type}:rsp{response_code}"
+            self.state.last_failure_type = failure_type
             return False
         except Exception as err:  # noqa: BLE001 - worker must preserve queue on failure.
             self.state.last_failure_stage = "RECORDING_WORKER_ERROR"
