@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
 from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
-from .recording_download_probe_beta18 import stream_probe_state
+from .recording_download_probe_beta19 import stream_probe_state
 from .recording_probe import probe_state
 
 
@@ -215,6 +215,21 @@ async def async_get_config_entry_diagnostics(
                 "cmd8_media_frames": stream.cmd8_media_frames,
                 "cmd8_unknown_frames": stream.cmd8_unknown_frames,
                 "cmd8_media_observed": stream.cmd8_media_observed,
+                "keepalive_attempted": stream.keepalive_attempted,
+                "keepalive_count": stream.keepalive_count,
+                "keepalive_interval_seconds": stream.keepalive_interval_seconds,
+                "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
+                "decoded_cmd8_bytes": stream.decoded_cmd8_bytes,
+                "raw_cmd8_chunks": stream.raw_cmd8_chunks,
+                "nonzero_payload_offset_frames": stream.nonzero_payload_offset_frames,
+                "aggregate_bytes": stream.aggregate_bytes,
+                "aggregate_limit_bytes": stream.aggregate_limit_bytes,
+                "mp4_offset_found": stream.mp4_offset_found,
+                "mp4_offset": stream.mp4_offset,
+                "mp4_bytes_collected": stream.mp4_bytes_collected,
+                "expected_size_reached": stream.expected_size_reached,
+                "expected_size_match": stream.expected_size_match,
+                "bcmedia_prefix_bytes": stream.bcmedia_prefix_bytes,
                 "distinct_msg_num_count": stream.distinct_msg_num_count,
                 "max_body_length": stream.max_body_length,
                 "response_codes": list(stream.response_codes),
@@ -243,7 +258,7 @@ async def async_get_config_entry_diagnostics(
             "full_media_download_attempted": False,
             "cmd8_attempted": stream.cmd8_attempted,
         },
-        "milestone": "3B.2b-cmd13-prepare-cmd8-media-shape-probe",
+        "milestone": "3B.2b-cmd8-keepalive-full-transfer-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
