@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/Dmxsir/ha-reolink-battery/issues",
   "loggers": ["reolink_aio"],
   "requirements": ["pycryptodomex==3.23.0", "reolink-aio==0.21.8"],
-  "version": "0.1.2-beta.16"
+  "version": "0.1.2-beta.17"
 }
