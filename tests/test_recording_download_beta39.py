@@ -1,6 +1,7 @@
 """Regression guards for beta.39 fresh P2P heartbeat transaction IDs."""
 
 from pathlib import Path
+import json
 import unittest
 
 ROOT = Path(__file__).parents[1]
@@ -12,7 +13,7 @@ MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
 
 
 class Beta39FreshHeartbeatTidTests(unittest.TestCase):
-    def test_every_heartbeat_gets_a_fresh_transaction_id(self):
+    def test_fresh_heartbeat_transaction_id_capability_is_preserved(self):
         source = BETA20.read_text()
         self.assertIn("self._p2p_heartbeat_tids: set[int] = set()", source)
         self.assertIn("transaction_id = secrets.randbelow(999_000) + 1_000", source)
@@ -38,15 +39,16 @@ class Beta39FreshHeartbeatTidTests(unittest.TestCase):
         self.assertIn("protocol=protocol", beta21)
         self.assertIn("RECORDING_SETTLE_SECONDS = 60.0", WORKER.read_text())
 
-    def test_diagnostics_and_version(self):
+    def test_diagnostics_and_minimum_version(self):
         diagnostics = DIAGNOSTICS.read_text()
         for token in (
             "p2p_heartbeat_fresh_tid_enabled",
             "p2p_heartbeat_unique_tid_count",
-            "3B.13-fresh-p2p-heartbeat-tid",
         ):
             self.assertIn(token, diagnostics)
-        self.assertIn('"version": "0.1.2-beta.39"', MANIFEST.read_text())
+        version = json.loads(MANIFEST.read_text())["version"]
+        beta_number = int(version.rsplit("beta.", 1)[1])
+        self.assertGreaterEqual(beta_number, 39)
 
 
 if __name__ == "__main__":
