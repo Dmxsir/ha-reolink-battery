@@ -20,6 +20,8 @@ from .camera import CameraStageError, prepare_standalone_channel_zero
 from .events import CloudEvent
 from .recording_probe import (
     FILE_INFO_HEADER_CHANNEL_ID,
+    FileInfoListError,
+    FileInfoTrace,
     _list_recordings_file_info,
     select_recording_candidate,
 )
@@ -50,10 +52,12 @@ class DownloadPrepareError(CameraStageError):
         *,
         failure_type: str = "",
         response_code: int | None = None,
+        file_info_trace: FileInfoTrace | None = None,
     ) -> None:
         super().__init__(stage)
         self.failure_type = failure_type
         self.response_code = response_code
+        self.file_info_trace = file_info_trace
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +82,7 @@ class DownloadPrepareResult:
     request: Cmd13RequestMetadata
     response: FileDownloadFrameMetadata
     response_accepted: bool
+    file_info_trace: FileInfoTrace
 
 
 @dataclass(slots=True)
@@ -108,6 +113,22 @@ class DownloadPrepareState:
     response_body_length: int | None = None
     response_payload_offset: int | None = None
     first_payload_length: int = 0
+    file_info_open_attempted: bool = False
+    file_info_open_succeeded: bool = False
+    file_info_open_failure_type: str = ""
+    file_info_open_response_code: int | None = None
+    file_info_handle_present: bool = False
+    file_info_get_attempted: bool = False
+    file_info_get_page_index: int | None = None
+    file_info_get_pages_succeeded: int = 0
+    file_info_get_failure_type: str = ""
+    file_info_get_response_code: int | None = None
+    file_info_last_page_file_count: int | None = None
+    file_info_finished_flag: bool | None = None
+    file_info_close_attempted: bool = False
+    file_info_close_succeeded: bool = False
+    file_info_close_failure_type: str = ""
+    file_info_close_response_code: int | None = None
 
 
 _STATES: dict[str, DownloadPrepareState] = {}
@@ -116,6 +137,28 @@ _STATES: dict[str, DownloadPrepareState] = {}
 def download_prepare_state(entry_id: str) -> DownloadPrepareState:
     """Return secret-safe cmd13 probe state for one config entry."""
     return _STATES.setdefault(entry_id, DownloadPrepareState())
+
+
+def apply_file_info_trace(state: DownloadPrepareState, trace: FileInfoTrace | None) -> None:
+    """Copy only non-secret FileInfoList telemetry into runtime diagnostics state."""
+    if trace is None:
+        return
+    state.file_info_open_attempted = trace.open_attempted
+    state.file_info_open_succeeded = trace.open_succeeded
+    state.file_info_open_failure_type = trace.open_failure_type
+    state.file_info_open_response_code = trace.open_response_code
+    state.file_info_handle_present = trace.handle_present
+    state.file_info_get_attempted = trace.get_attempted
+    state.file_info_get_page_index = trace.get_page_index
+    state.file_info_get_pages_succeeded = trace.get_pages_succeeded
+    state.file_info_get_failure_type = trace.get_failure_type
+    state.file_info_get_response_code = trace.get_response_code
+    state.file_info_last_page_file_count = trace.last_page_file_count
+    state.file_info_finished_flag = trace.finished_flag
+    state.file_info_close_attempted = trace.close_attempted
+    state.file_info_close_succeeded = trace.close_succeeded
+    state.file_info_close_failure_type = trace.close_failure_type
+    state.file_info_close_response_code = trace.close_response_code
 
 
 def _download_xml(uid: str, file_name: str) -> str:
@@ -204,6 +247,7 @@ async def async_prepare_download_for_event(
     host = None
     connection = None
     failure_stage = "UID_RESOLVE_ERROR"
+    file_info_trace = FileInfoTrace()
     try:
         interface_name, _ = await asyncio.to_thread(
             linux_ipv4_interface, str(interface.ip)
@@ -249,10 +293,23 @@ async def async_prepare_download_for_event(
         day_start = datetime.combine(target_local.date(), time.min)
         day_end = datetime.combine(target_local.date(), time(23, 59, 59))
 
-        recordings = await _list_recordings_file_info(host, uid, day_start, day_end)
+        try:
+            recordings = await _list_recordings_file_info(
+                host, uid, day_start, day_end, trace=file_info_trace
+            )
+        except FileInfoListError as err:
+            raise DownloadPrepareError(
+                err.stage,
+                failure_type=err.failure_type,
+                response_code=err.response_code,
+                file_info_trace=err.trace,
+            ) from None
+
         candidate = select_recording_candidate(target_local, list(recordings))
         if candidate is None:
-            raise DownloadPrepareError("RECORDING_MATCH_ERROR")
+            raise DownloadPrepareError(
+                "RECORDING_MATCH_ERROR", file_info_trace=file_info_trace
+            )
 
         failure_stage = "DOWNLOAD_PREPARE_FRAME_ERROR"
         wire, request = _build_cmd13_wire(host.baichuan, uid, candidate.file_name)
@@ -266,11 +323,13 @@ async def async_prepare_download_for_event(
             raise DownloadPrepareError(
                 "DOWNLOAD_PREPARE_TIMEOUT",
                 failure_type="TimeoutError",
+                file_info_trace=file_info_trace,
             ) from None
         except (ReolinkError, OSError, RuntimeError) as err:
             raise DownloadPrepareError(
                 "DOWNLOAD_PREPARE_FRAME_ERROR",
                 failure_type=type(err).__name__,
+                file_info_trace=file_info_trace,
             ) from None
 
         return DownloadPrepareResult(
@@ -281,6 +340,7 @@ async def async_prepare_download_for_event(
             response=response,
             response_accepted=response.response_code
             in ACCEPTED_PREPARE_RESPONSE_CODES,
+            file_info_trace=file_info_trace,
         )
     except CameraStageError:
         raise
@@ -293,6 +353,7 @@ async def async_prepare_download_for_event(
             failure_stage,
             failure_type=type(err).__name__,
             response_code=rsp_code,
+            file_info_trace=file_info_trace,
         ) from None
     finally:
         try:
