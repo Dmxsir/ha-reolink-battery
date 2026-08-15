@@ -72,6 +72,14 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     udp_max_ack_delay_ms: float | None = None
     udp_seq_at_remote_disconnect: int | None = None
     udp_snapshot_from_local_protocol: bool = False
+    udp_network_bc_datagrams_received: int = 0
+    udp_highest_network_seq_seen: int | None = None
+    udp_recovered_missing_packet_count: int = 0
+    udp_unresolved_missing_packet_count_at_disconnect: int = 0
+    udp_buffered_out_of_order_at_disconnect: int = 0
+    udp_highest_buffered_seq_at_disconnect: int | None = None
+    udp_expected_next_seq_at_disconnect: int | None = None
+    udp_max_gap_recovery_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,7 +193,17 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         self.udp_ack_with_gap_bitmap_count = 0
         self.udp_last_contiguous_seq: int | None = None
         self.udp_seq_at_remote_disconnect: int | None = None
+        self.udp_network_bc_datagrams_received = 0
+        self.udp_highest_network_seq_seen: int | None = None
+        self.udp_recovered_missing_packet_count = 0
+        self.udp_unresolved_missing_packet_count_at_disconnect = 0
+        self.udp_buffered_out_of_order_at_disconnect = 0
+        self.udp_highest_buffered_seq_at_disconnect: int | None = None
+        self.udp_expected_next_seq_at_disconnect: int | None = None
+        self.udp_max_gap_recovery_ms: float | None = None
         self._missing_seq_ids_seen: set[int] = set()
+        self._recovered_missing_seq_ids: set[int] = set()
+        self._missing_seq_first_seen_at: dict[int, float] = {}
         self._cmd8_delivery_future: asyncio.Future[bool] | None = None
 
 
@@ -218,6 +236,38 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         ):
             future.set_result(True)
 
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Track real network BC datagrams separately from buffered reprocessing."""
+        if len(data) >= 20 and data[:4] == bytes.fromhex("10cf872a"):
+            client_id = int.from_bytes(data[4:8], "little")
+            if client_id == self.client_id:
+                seq_id = int.from_bytes(data[12:16], "little")
+                self.udp_network_bc_datagrams_received += 1
+                if (
+                    self.udp_highest_network_seq_seen is None
+                    or seq_id > self.udp_highest_network_seq_seen
+                ):
+                    self.udp_highest_network_seq_seen = seq_id
+                if (
+                    seq_id in self._missing_seq_ids_seen
+                    and seq_id not in self._recovered_missing_seq_ids
+                ):
+                    self._recovered_missing_seq_ids.add(seq_id)
+                    self.udp_recovered_missing_packet_count = len(
+                        self._recovered_missing_seq_ids
+                    )
+                    first_seen = self._missing_seq_first_seen_at.get(seq_id)
+                    if first_seen is not None:
+                        delay_ms = round(
+                            max(0.0, self._loop.time() - first_seen) * 1000.0, 3
+                        )
+                        if (
+                            self.udp_max_gap_recovery_ms is None
+                            or delay_ms > self.udp_max_gap_recovery_ms
+                        ):
+                            self.udp_max_gap_recovery_ms = delay_ms
+        super().datagram_received(data, addr)
+
     def parse_udp_ack(self, port: int) -> None:
         data = self._udp_data
         if len(data) >= 28:
@@ -249,6 +299,9 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
                     missing = set(range(expected, seq_id))
                     newly_seen = missing - self._missing_seq_ids_seen
                     self.udp_missing_packet_count += len(newly_seen)
+                    now = self._loop.time()
+                    for missing_seq in newly_seen:
+                        self._missing_seq_first_seen_at.setdefault(missing_seq, now)
                     self._missing_seq_ids_seen.update(newly_seen)
         try:
             super().parse_udp_bc(port)
@@ -285,6 +338,15 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
             self.udp_seq_at_remote_disconnect = (
                 self._recv_seq_id if self._recv_seq_id >= 0 else None
             )
+            unresolved = (
+                self._missing_seq_ids_seen - self._recovered_missing_seq_ids
+            )
+            self.udp_unresolved_missing_packet_count_at_disconnect = len(unresolved)
+            self.udp_buffered_out_of_order_at_disconnect = len(self._seq_data)
+            self.udp_highest_buffered_seq_at_disconnect = (
+                max(self._seq_data) if self._seq_data else None
+            )
+            self.udp_expected_next_seq_at_disconnect = self._recv_seq_id + 1
         super().parse_udp_connection(port)
 
     def connection_lost(self, exc: Exception | None = None) -> None:
@@ -468,6 +530,28 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             trace.udp_ack_with_gap_bitmap_count = snapshot_protocol.udp_ack_with_gap_bitmap_count
             trace.udp_last_contiguous_seq = snapshot_protocol.udp_last_contiguous_seq
             trace.udp_seq_at_remote_disconnect = snapshot_protocol.udp_seq_at_remote_disconnect
+            trace.udp_network_bc_datagrams_received = (
+                snapshot_protocol.udp_network_bc_datagrams_received
+            )
+            trace.udp_highest_network_seq_seen = (
+                snapshot_protocol.udp_highest_network_seq_seen
+            )
+            trace.udp_recovered_missing_packet_count = (
+                snapshot_protocol.udp_recovered_missing_packet_count
+            )
+            trace.udp_unresolved_missing_packet_count_at_disconnect = (
+                snapshot_protocol.udp_unresolved_missing_packet_count_at_disconnect
+            )
+            trace.udp_buffered_out_of_order_at_disconnect = (
+                snapshot_protocol.udp_buffered_out_of_order_at_disconnect
+            )
+            trace.udp_highest_buffered_seq_at_disconnect = (
+                snapshot_protocol.udp_highest_buffered_seq_at_disconnect
+            )
+            trace.udp_expected_next_seq_at_disconnect = (
+                snapshot_protocol.udp_expected_next_seq_at_disconnect
+            )
+            trace.udp_max_gap_recovery_ms = snapshot_protocol.udp_max_gap_recovery_ms
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:
         packet, transaction_id = super()._construct_udp_mess(body)
@@ -681,7 +765,7 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
                 protocol.connection_lost_exception_present
             )
             self._apply_p2p_heartbeat_trace(trace)
-            self._apply_udp_reliability_trace(trace)
+            self._apply_udp_reliability_trace(trace, protocol=protocol)
             if not trace.termination_reason:
                 trace.termination_reason = reason or "collector_stopped"
             trace.elapsed_seconds = round(self._loop.time() - started_at, 3)

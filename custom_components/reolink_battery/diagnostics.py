@@ -311,6 +311,26 @@ async def async_get_config_entry_diagnostics(
                 "udp_snapshot_from_local_protocol": (
                     stream.udp_snapshot_from_local_protocol
                 ),
+                "udp_network_bc_datagrams_received": (
+                    stream.udp_network_bc_datagrams_received
+                ),
+                "udp_highest_network_seq_seen": stream.udp_highest_network_seq_seen,
+                "udp_recovered_missing_packet_count": (
+                    stream.udp_recovered_missing_packet_count
+                ),
+                "udp_unresolved_missing_packet_count_at_disconnect": (
+                    stream.udp_unresolved_missing_packet_count_at_disconnect
+                ),
+                "udp_buffered_out_of_order_at_disconnect": (
+                    stream.udp_buffered_out_of_order_at_disconnect
+                ),
+                "udp_highest_buffered_seq_at_disconnect": (
+                    stream.udp_highest_buffered_seq_at_disconnect
+                ),
+                "udp_expected_next_seq_at_disconnect": (
+                    stream.udp_expected_next_seq_at_disconnect
+                ),
+                "udp_max_gap_recovery_ms": stream.udp_max_gap_recovery_ms,
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -384,7 +404,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.8-rx-telemetry-preserved",
+        "milestone": "3B.9-gap-recovery-telemetry",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }
