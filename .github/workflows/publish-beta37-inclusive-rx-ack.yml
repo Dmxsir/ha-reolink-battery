@@ -1,0 +1,225 @@
+name: Publish beta.37 inclusive RX ACK
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta37-inclusive-rx-ack.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feature/recording-worker-3b2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'reolink-aio==0.21.8' 'pycryptodomex==3.23.0'
+
+      - name: Patch beta.37 inclusive RX ACK bitmap
+        shell: bash
+        run: |
+          set -euo pipefail
+          BETA21_BEFORE="$(sha256sum custom_components/reolink_battery/recording_download_probe_beta21.py | awk '{print $1}')"
+          WORKER_BEFORE="$(sha256sum custom_components/reolink_battery/recording_worker.py | awk '{print $1}')"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, got {count}")
+              return text.replace(old, new, 1)
+
+          root = Path('.')
+          beta20_path = root / 'custom_components/reolink_battery/recording_download_probe_beta20.py'
+          beta20 = beta20_path.read_text()
+
+          beta20 = replace_once(
+              beta20,
+              'from reolink_aio.baichuan.udp_protocol import MTU\n',
+              'from reolink_aio.baichuan.udp_protocol import MAGIC_UDP_ACK, MTU\n',
+              'ACK magic import',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '    udp_periodic_ack_gap_count: int = 0\n\n\n@dataclass(frozen=True, slots=True)\n',
+              '    udp_periodic_ack_gap_count: int = 0\n'
+              '    udp_ack_inclusive_highest_enabled: bool = False\n'
+              '    udp_ack_inclusive_highest_count: int = 0\n'
+              '    udp_current_missing_packet_count_at_disconnect: int = 0\n\n\n'
+              '@dataclass(frozen=True, slots=True)\n',
+              'trace fields',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '        self.udp_periodic_ack_gap_count = 0\n'
+              '        self._missing_seq_ids_seen: set[int] = set()\n',
+              '        self.udp_periodic_ack_gap_count = 0\n'
+              '        self.udp_ack_inclusive_highest_enabled = True\n'
+              '        self.udp_ack_inclusive_highest_count = 0\n'
+              '        self.udp_current_missing_packet_count_at_disconnect = 0\n'
+              '        self._missing_seq_ids_seen: set[int] = set()\n',
+              'protocol counters',
+          )
+
+          old_send_ack = '''    def send_ack(self) -> None:\n        will_send = (\n            self._transport is not None\n            and self.host_id is not None\n            and self._recv_seq_id >= 0\n        )\n        gap_bitmap = False\n        if will_send and self._seq_data:\n            highest = max(self._seq_data)\n            gap_bitmap = any(\n                seq_id not in self._seq_data\n                for seq_id in range(self._recv_seq_id + 1, highest)\n            )\n        super().send_ack()\n        if will_send:\n            self.udp_ack_sent_count += 1\n            if gap_bitmap:\n                self.udp_ack_with_gap_bitmap_count += 1\n\n'''
+
+          new_send_ack = '''    def send_ack(self) -> None:\n        """Send the RX ACK bitmap through the highest buffered sequence ID."""\n        if (\n            self._transport is None\n            or self.host_id is None\n            or self._recv_seq_id < 0\n        ):\n            return\n\n        payload = bytearray()\n        highest: int | None = None\n        if self._seq_data:\n            highest = max(self._seq_data)\n            for seq_id in range(self._recv_seq_id + 1, highest + 1):\n                payload.append(1 if seq_id in self._seq_data else 0)\n\n        host_id_bytes = self.host_id.to_bytes(4, byteorder="little")\n        seq_id_bytes = self._recv_seq_id.to_bytes(4, byteorder="little")\n        payload_len_bytes = len(payload).to_bytes(4, byteorder="little")\n        udp_header = (\n            bytes.fromhex(MAGIC_UDP_ACK)\n            + host_id_bytes\n            + bytes.fromhex("0000000000000000")\n            + seq_id_bytes\n            + bytes.fromhex("00000000")\n            + payload_len_bytes\n        )\n        self._transport.sendto(\n            udp_header + bytes(payload), (self._host, self.remote_port)\n        )\n\n        self.udp_ack_sent_count += 1\n        if 0 in payload:\n            self.udp_ack_with_gap_bitmap_count += 1\n        if highest is not None:\n            self.udp_ack_inclusive_highest_count += 1\n\n'''
+          beta20 = replace_once(beta20, old_send_ack, new_send_ack, 'send_ack override')
+
+          beta20 = replace_once(
+              beta20,
+              '            self.udp_expected_next_seq_at_disconnect = self._recv_seq_id + 1\n'
+              '        super().parse_udp_connection(port)\n',
+              '            self.udp_expected_next_seq_at_disconnect = self._recv_seq_id + 1\n'
+              '            if self._seq_data:\n'
+              '                highest = max(self._seq_data)\n'
+              '                current_window = set(\n'
+              '                    range(self._recv_seq_id + 1, highest + 1)\n'
+              '                )\n'
+              '                self.udp_current_missing_packet_count_at_disconnect = len(\n'
+              '                    current_window - set(self._seq_data)\n'
+              '                )\n'
+              '            else:\n'
+              '                self.udp_current_missing_packet_count_at_disconnect = 0\n'
+              '        super().parse_udp_connection(port)\n',
+              'current missing snapshot',
+          )
+
+          beta20 = replace_once(
+              beta20,
+              '            trace.udp_periodic_ack_gap_count = (\n'
+              '                snapshot_protocol.udp_periodic_ack_gap_count\n'
+              '            )\n\n'
+              '    def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:\n',
+              '            trace.udp_periodic_ack_gap_count = (\n'
+              '                snapshot_protocol.udp_periodic_ack_gap_count\n'
+              '            )\n'
+              '            trace.udp_ack_inclusive_highest_enabled = (\n'
+              '                snapshot_protocol.udp_ack_inclusive_highest_enabled\n'
+              '            )\n'
+              '            trace.udp_ack_inclusive_highest_count = (\n'
+              '                snapshot_protocol.udp_ack_inclusive_highest_count\n'
+              '            )\n'
+              '            trace.udp_current_missing_packet_count_at_disconnect = (\n'
+              '                snapshot_protocol.udp_current_missing_packet_count_at_disconnect\n'
+              '            )\n\n'
+              '    def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:\n',
+              'trace snapshot fields',
+          )
+
+          beta20_path.write_text(beta20)
+
+          diagnostics_path = root / 'custom_components/reolink_battery/diagnostics.py'
+          diagnostics = diagnostics_path.read_text()
+          diagnostics = replace_once(
+              diagnostics,
+              '                "udp_periodic_ack_gap_count": (\n'
+              '                    stream.udp_periodic_ack_gap_count\n'
+              '                ),\n'
+              '                "remote_disconnect_observed": stream.remote_disconnect_observed,\n',
+              '                "udp_periodic_ack_gap_count": (\n'
+              '                    stream.udp_periodic_ack_gap_count\n'
+              '                ),\n'
+              '                "udp_ack_inclusive_highest_enabled": (\n'
+              '                    stream.udp_ack_inclusive_highest_enabled\n'
+              '                ),\n'
+              '                "udp_ack_inclusive_highest_count": (\n'
+              '                    stream.udp_ack_inclusive_highest_count\n'
+              '                ),\n'
+              '                "udp_current_missing_packet_count_at_disconnect": (\n'
+              '                    stream.udp_current_missing_packet_count_at_disconnect\n'
+              '                ),\n'
+              '                "remote_disconnect_observed": stream.remote_disconnect_observed,\n',
+              'diagnostic fields',
+          )
+          diagnostics = replace_once(
+              diagnostics,
+              '        "milestone": "3B.10-periodic-rx-ack",\n',
+              '        "milestone": "3B.11-inclusive-rx-ack-bitmap",\n',
+              'milestone',
+          )
+          diagnostics_path.write_text(diagnostics)
+
+          manifest_path = root / 'custom_components/reolink_battery/manifest.json'
+          manifest = manifest_path.read_text()
+          manifest = replace_once(
+              manifest,
+              '"version": "0.1.2-beta.36"',
+              '"version": "0.1.2-beta.37"',
+              'manifest version',
+          )
+          manifest_path.write_text(manifest)
+
+          test_path = root / 'tests/test_recording_download_beta37.py'
+          test_path.write_text('''"""Regression guards for beta.37 inclusive receive ACK bitmap."""\n\nfrom pathlib import Path\nimport unittest\n\nROOT = Path(__file__).parents[1]\nBETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"\nBETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"\nWORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"\nDIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"\nMANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"\n\n\nclass Beta37InclusiveRxAckTests(unittest.TestCase):\n    def test_ack_bitmap_includes_highest_buffered_sequence(self):\n        source = BETA20.read_text()\n        start = source.index("    def send_ack(self) -> None:")\n        end = source.index("\n    def send_periodic_ack", start)\n        body = source[start:end]\n        self.assertIn("range(self._recv_seq_id + 1, highest + 1)", body)\n        self.assertNotIn("super().send_ack()", body)\n        self.assertIn("bytes.fromhex(MAGIC_UDP_ACK)", body)\n        self.assertIn("udp_header + bytes(payload)", body)\n\n    def test_periodic_ack_and_existing_transport_remain_enabled(self):\n        source = BETA20.read_text()\n        self.assertIn("PERIODIC_RX_ACK_INTERVAL = 0.010", source)\n        self.assertIn("P2P_HEARTBEAT_INTERVAL = 1.0", source)\n        self.assertIn("RELIABLE_UDP_ACK_TIMEOUT = 0.5", source)\n        self.assertIn("RELIABLE_UDP_MAX_RETRANSMITS = 2", source)\n        self.assertIn("protocol.send_periodic_ack()", source)\n        beta21 = BETA21.read_text()\n        self.assertEqual(beta21.count("_send_reliable_download_packet("), 2)\n        self.assertIn("protocol=protocol", beta21)\n        worker = WORKER.read_text()\n        self.assertIn("RECORDING_SETTLE_SECONDS = 60.0", worker)\n\n    def test_current_gap_snapshot_is_not_cumulative_counter(self):\n        source = BETA20.read_text()\n        self.assertIn("udp_current_missing_packet_count_at_disconnect", source)\n        self.assertIn("current_window - set(self._seq_data)", source)\n\n    def test_diagnostics_and_version(self):\n        diagnostics = DIAGNOSTICS.read_text()\n        for token in (\n            "udp_ack_inclusive_highest_enabled",\n            "udp_ack_inclusive_highest_count",\n            "udp_current_missing_packet_count_at_disconnect",\n            "3B.11-inclusive-rx-ack-bitmap",\n        ):\n            self.assertIn(token, diagnostics)\n        self.assertIn('"version": "0.1.2-beta.37"', MANIFEST.read_text())\n\n\nif __name__ == "__main__":\n    unittest.main()\n''')
+          PY
+
+          test "$BETA21_BEFORE" = "$(sha256sum custom_components/reolink_battery/recording_download_probe_beta21.py | awk '{print $1}')"
+          test "$WORKER_BEFORE" = "$(sha256sum custom_components/reolink_battery/recording_worker.py | awk '{print $1}')"
+
+      - name: Verify beta.37 source
+        run: |
+          set -euo pipefail
+          grep -q '"version": "0.1.2-beta.37"' custom_components/reolink_battery/manifest.json
+          grep -q '3B.11-inclusive-rx-ack-bitmap' custom_components/reolink_battery/diagnostics.py
+          grep -q 'highest + 1' custom_components/reolink_battery/recording_download_probe_beta20.py
+          python -m compileall -q custom_components/reolink_battery
+          python tests/test_recording_download_beta37.py
+          python tests/test_recording_download_beta35.py
+          python tests/test_recording_download_beta34.py
+          python tests/test_recording_download_beta32.py
+          python tests/test_recording_download_beta20.py
+          python tests/test_recording_download_probe.py
+          git diff --check
+
+      - name: Commit beta.37 source
+        id: source
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add custom_components/reolink_battery/recording_download_probe_beta20.py custom_components/reolink_battery/diagnostics.py custom_components/reolink_battery/manifest.json tests/test_recording_download_beta37.py
+          git commit -m 'Fix beta.37 inclusive receive ACK bitmap'
+          git push origin HEAD:feature/recording-worker-3b2
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish beta.37 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git tag v0.1.2-beta.37 "$SOURCE_SHA"
+          git push origin v0.1.2-beta.37
+          gh release create v0.1.2-beta.37 \
+            --repo Dmxsir/ha-reolink-battery \
+            --target "$SOURCE_SHA" \
+            --prerelease \
+            --title 'v0.1.2-beta.37' \
+            --notes 'Milestone 3B.11 fixes one receive-side ACK bitmap boundary on top of beta.36. When out-of-order UDP packets are buffered, the ACK bitmap now explicitly includes the highest buffered sequence ID, matching Neolink get_needed_packets() semantics instead of stopping one sequence short. The beta.36 10 ms periodic ACK experiment is intentionally retained unchanged so this beta isolates the bitmap boundary change. Single-lease handoff, the sole 1-second C2D_HB sender, cmd13/cmd8 same-sequence outbound retransmission, handle-bound full-high/mainStream download, worker retries, exact MP4 verification and Media/Telegram handoff are unchanged. Diagnostics add an inclusive-highest ACK counter and a current-window missing-packet count at remote disconnect so cumulative historical gap telemetry cannot be mistaken for packets still missing at disconnect. No cmd234 or cmd9 is introduced.'
+
+      - name: Remove temporary workflow
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/publish-beta37-inclusive-rx-ack.yml
+          git commit -m 'Remove temporary beta37 publish workflow'
+          git push origin HEAD:feature/recording-worker-3b2
