@@ -119,7 +119,7 @@ async def async_setup_entry(
     runtime = ReolinkBatteryRuntime(cloud, coordinator, status)
     entry.runtime_data = runtime
 
-    notification_entity = entry.options.get(CONF_NOTIFICATION_ENTITY)
+    notification_entity = getattr(entry, "options", {}).get(CONF_NOTIFICATION_ENTITY)
     if isinstance(notification_entity, str) and notification_entity:
         from .notification_bridge import NotificationBridge
 
