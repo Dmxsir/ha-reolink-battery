@@ -126,12 +126,21 @@ async def async_setup_entry(
         async def ingest_notification(event) -> int:
             return await coordinator.async_ingest_events([event])
 
+        initial_notification_event = next(
+            (
+                event
+                for event in reversed(coordinator.pending_events)
+                if event.source == "android_notification"
+            ),
+            None,
+        )
         runtime.notification_bridge = NotificationBridge(
             hass,
             notification_entity,
             entry.data.get(CONF_DEVICE_NAME) or entry.title,
             entry.data[CONF_UID],
             ingest_notification,
+            initial_event=initial_notification_event,
         )
         runtime.notification_bridge.start()
 
