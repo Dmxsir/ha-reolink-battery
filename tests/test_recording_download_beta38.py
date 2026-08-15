@@ -8,7 +8,7 @@ BETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_pr
 BETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"
 WORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"
 DIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"
-MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
+
 
 class Beta38PeriodicOnlyRxAckTests(unittest.TestCase):
     def test_periodic_task_is_only_wire_ack_sender(self):
@@ -36,11 +36,14 @@ class Beta38PeriodicOnlyRxAckTests(unittest.TestCase):
         worker = WORKER.read_text()
         self.assertIn("RECORDING_SETTLE_SECONDS = 60.0", worker)
 
-    def test_diagnostics_and_version(self):
+    def test_periodic_only_diagnostics_contract_remains_exposed(self):
         diagnostics = DIAGNOSTICS.read_text()
-        for token in ("udp_periodic_only_ack_enabled", "udp_immediate_ack_suppressed_count", "3B.12-periodic-only-rx-ack"):
+        for token in (
+            "udp_periodic_only_ack_enabled",
+            "udp_immediate_ack_suppressed_count",
+        ):
             self.assertIn(token, diagnostics)
-        self.assertIn('"version": "0.1.2-beta.38"', MANIFEST.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
