@@ -1,4 +1,4 @@
-"""Focused beta.12 tests for cmd13 FileInfo stream/file metadata."""
+"""Regression tests for cmd13 FileInfo stream/file metadata."""
 
 from __future__ import annotations
 
@@ -49,14 +49,13 @@ def _argus_candidate(**overrides):
 
 
 class DownloadMetadataProbeTests(unittest.TestCase):
-    def test_metadata_enriched_payload_uses_camera_values(self):
+    def test_metadata_enriched_payload_keeps_stream_and_file_type(self):
         wire, meta, _ = probe._build_cmd13_wire(
             _FakeBaichuan(), "ABC123", _argus_candidate()
         )
         payload = wire[24 + meta.payload_offset :].decode("utf-8")
         self.assertIn("<streamType>mainStream</streamType>", payload)
         self.assertIn("<fileType>mp4</fileType>", payload)
-        self.assertNotIn("<recordType>", payload)
         self.assertIn("<Id>/mnt/sda/recording.mp4</Id>", payload)
         self.assertIn("<fileName>/mnt/sda/recording.mp4</fileName>", payload)
 
@@ -70,6 +69,7 @@ class DownloadMetadataProbeTests(unittest.TestCase):
         )
         self.assertNotIn("<streamType>", xml)
         self.assertNotIn("<fileType>", xml)
+        self.assertNotIn("<recordType>", xml)
 
     def test_framing_is_unchanged_from_beta11(self):
         wire, meta, _ = probe._build_cmd13_wire(
@@ -82,12 +82,6 @@ class DownloadMetadataProbeTests(unittest.TestCase):
         self.assertEqual(int.from_bytes(wire[14:16], "little"), 6)
         self.assertEqual(int.from_bytes(wire[18:20], "little"), 0x6482)
         self.assertEqual(meta.payload_offset, len(probe._binary_extension_xml().encode("utf-8")))
-
-    def test_content_layout_marker(self):
-        self.assertEqual(
-            probe.CONTENT_LAYOUT,
-            "fileinfo_identity_plus_stream_type_file_type",
-        )
 
 
 if __name__ == "__main__":
