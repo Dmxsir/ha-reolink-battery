@@ -25,6 +25,7 @@ from .const import (
     CONF_LOCAL_STATE,
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
+    CONF_NOTIFICATION_ENTITY,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRES_AT,
     CONF_UID,
@@ -41,6 +42,7 @@ from .device_status import (
     local_state_as_dict,
     local_state_from_dict,
 )
+from .notification_bridge import NotificationBridge
 
 PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON)
 STORAGE_SENSOR_KEYS = ("storage_total", "storage_used", "storage_free")
@@ -62,6 +64,7 @@ class ReolinkBatteryRuntime:
     coordinator: ReolinkBatteryCoordinator
     status: DeviceStatusCache
     local_operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    notification_bridge: NotificationBridge | None = None
 
 
 ReolinkBatteryConfigEntry = ConfigEntry[ReolinkBatteryRuntime]
@@ -70,7 +73,7 @@ ReolinkBatteryConfigEntry = ConfigEntry[ReolinkBatteryRuntime]
 async def async_setup_entry(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> bool:
-    """Set up cloud polling and the pending event queue."""
+    """Set up cloud polling, queue and optional HA Companion notification bridge."""
     cloud = ReolinkCloudClient(async_get_clientsession(hass))
 
     def update_tokens(tokens: CloudTokens) -> None:
@@ -110,7 +113,24 @@ async def async_setup_entry(
             local_state,
         )
     )
-    entry.runtime_data = ReolinkBatteryRuntime(cloud, coordinator, status)
+    runtime = ReolinkBatteryRuntime(cloud, coordinator, status)
+    entry.runtime_data = runtime
+
+    notification_entity = entry.options.get(CONF_NOTIFICATION_ENTITY)
+    if isinstance(notification_entity, str) and notification_entity:
+
+        async def ingest_notification(event) -> int:
+            return await coordinator.async_ingest_events([event])
+
+        runtime.notification_bridge = NotificationBridge(
+            hass,
+            notification_entity,
+            entry.data.get(CONF_DEVICE_NAME) or entry.title,
+            entry.data[CONF_UID],
+            ingest_notification,
+        )
+        runtime.notification_bridge.start()
+
     _migrate_storage_units(hass, entry)
     _update_device_registry(hass, entry, local_state)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -221,8 +241,10 @@ async def async_refresh_local_status(
 async def async_unload_entry(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> bool:
-    """Persist the queue and stop polling."""
+    """Persist the queue, stop listeners and stop polling."""
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
+    if entry.runtime_data.notification_bridge is not None:
+        entry.runtime_data.notification_bridge.stop()
     await entry.runtime_data.coordinator.async_shutdown()
     return True
