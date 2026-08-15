@@ -50,6 +50,8 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     p2p_heartbeat_first_delay_seconds: float | None = None
     p2p_heartbeat_pre_cmd13_count: int = 0
     p2p_heartbeat_background_task_active: bool = False
+    p2p_heartbeat_fresh_tid_enabled: bool = False
+    p2p_heartbeat_unique_tid_count: int = 0
     proactive_cmd234_count: int = 0
     remote_disconnect_observed: bool = False
     connection_lost_exception_present: bool = False
@@ -436,6 +438,8 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         self._p2p_heartbeat_first_sent_at: float | None = None
         self._p2p_heartbeat_total_count = 0
         self._p2p_heartbeat_started_after_handoff = False
+        self._p2p_heartbeat_fresh_tid_enabled = True
+        self._p2p_heartbeat_tids: set[int] = set()
         self._periodic_rx_ack_task: asyncio.Task[None] | None = None
         self._reliable_ack_waiters: dict[int, asyncio.Future[bool]] = {}
         self._reliable_sent_at: dict[int, float] = {}
@@ -680,10 +684,16 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             or protocol.host_id is None
         ):
             return False
-        transaction_id = self._p2p_heartbeat_tid
-        if transaction_id is None:
+        # Use a fresh discovery transaction ID for every C2D_HB instead of
+        # replaying the original C2D_C transaction ID for the whole session.
+        transaction_id = secrets.randbelow(999_000) + 1_000
+        while (
+            transaction_id == self._p2p_heartbeat_tid
+            or transaction_id in self._p2p_heartbeat_tids
+        ):
             transaction_id = secrets.randbelow(999_000) + 1_000
-            self._p2p_heartbeat_tid = transaction_id
+        self._p2p_heartbeat_tid = transaction_id
+        self._p2p_heartbeat_tids.add(transaction_id)
         packet = _encode_p2p_heartbeat(
             transaction_id,
             protocol.client_id,
@@ -724,6 +734,12 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         task = self._p2p_heartbeat_task
         trace.p2p_heartbeat_background_task_active = bool(
             task is not None and not task.done()
+        )
+        trace.p2p_heartbeat_fresh_tid_enabled = bool(
+            getattr(self, "_p2p_heartbeat_fresh_tid_enabled", False)
+        )
+        trace.p2p_heartbeat_unique_tid_count = len(
+            getattr(self, "_p2p_heartbeat_tids", set())
         )
         if snapshot_pre_cmd13:
             trace.p2p_heartbeat_pre_cmd13_count = self._p2p_heartbeat_total_count
