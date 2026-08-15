@@ -6,6 +6,7 @@ on:
       - feature/recording-worker-3b2
     paths:
       - .github/workflows/publish-beta39-fresh-heartbeat-tid.yml
+      - scripts/beta39_patch.py
 
 permissions:
   contents: write
