@@ -7,12 +7,14 @@ import ipaddress
 import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from xml.etree import ElementTree as XML
 from zoneinfo import ZoneInfo
 
 from reolink_aio.api import Host
+from reolink_aio.baichuan import xmls
 from reolink_aio.enums import ConnectionEnum
 from reolink_aio.exceptions import ReolinkError
-from reolink_aio.typings import VOD_file
+from reolink_aio.typings import parse_file_name
 
 from .camera import CameraStageError, prepare_standalone_channel_zero
 from .events import CloudEvent
@@ -25,6 +27,19 @@ from .transport import (
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_MATCH_TOLERANCE = timedelta(seconds=120)
+FILE_INFO_HEADER_CHANNEL_ID = 7
+MAX_FILE_INFO_PAGES = 10
+TYPICAL_FILE_INFO_PAGE_SIZE = 40
+
+
+@dataclass(frozen=True, slots=True)
+class RecordingMetadata:
+    """One SD recording returned by FileInfoList."""
+
+    file_name: str
+    start_time: datetime
+    end_time: datetime
+    size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +91,7 @@ def _interval_distance(target: datetime, start: datetime, end: datetime) -> floa
 
 def select_recording_candidate(
     target_local: datetime,
-    files: list[VOD_file],
+    files: list[object],
     *,
     tolerance: timedelta = DEFAULT_MATCH_TOLERANCE,
 ) -> RecordingCandidate | None:
@@ -84,20 +99,18 @@ def select_recording_candidate(
     unique: dict[tuple[str, datetime, datetime], RecordingCandidate] = {}
     for vod in files:
         try:
-            start = vod.start_time
-            end = vod.end_time
-            name = vod.file_name
-            size = vod.size
-        except (KeyError, TypeError, ValueError):
+            start = vod.start_time  # type: ignore[attr-defined]
+            end = vod.end_time  # type: ignore[attr-defined]
+            name = vod.file_name  # type: ignore[attr-defined]
+            size = vod.size  # type: ignore[attr-defined]
+        except (AttributeError, KeyError, TypeError, ValueError):
             continue
-        # Baichuan VOD timestamps are camera-local wall-clock values. Flatten
-        # timezone-aware values before comparing them with the camera-local target.
         if start.tzinfo is not None:
             start = start.replace(tzinfo=None)
         if end.tzinfo is not None:
             end = end.replace(tzinfo=None)
         distance = _interval_distance(target_local, start, end)
-        candidate = RecordingCandidate(name, start, end, size, distance)
+        candidate = RecordingCandidate(name, start, end, int(size), distance)
         unique[(name, start, end)] = candidate
 
     ranked = sorted(
@@ -118,20 +131,158 @@ def select_recording_candidate(
     return ranked[0]
 
 
-def _flatten_vod_files(vod_dict: dict[object, list[VOD_file]]) -> list[VOD_file]:
-    files: list[VOD_file] = []
-    seen: set[tuple[str, datetime, datetime]] = set()
-    for values in vod_dict.values():
-        for vod in values:
+def _text(node: XML.Element, *names: str) -> str | None:
+    for name in names:
+        value = node.findtext(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return None
+
+
+def _xml_time(node: XML.Element, tag: str) -> datetime | None:
+    block = node.find(tag)
+    if block is None:
+        return None
+    try:
+        return datetime(
+            int(block.findtext("year", "")),
+            int(block.findtext("month", "")),
+            int(block.findtext("day", "")),
+            int(block.findtext("hour", "")),
+            int(block.findtext("minute", "")),
+            int(block.findtext("second", "")),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _metadata_from_file_info(node: XML.Element) -> RecordingMetadata | None:
+    name = _text(node, "Id", "ID", "id", "name", "fileName")
+    if not name:
+        return None
+
+    start = _xml_time(node, "startTime")
+    end = _xml_time(node, "endTime")
+    if start is None or end is None:
+        parsed = parse_file_name(name)
+        if parsed is not None:
+            start = datetime.combine(parsed.date, parsed.start)
+            end = datetime.combine(parsed.date, parsed.end)
+            if end < start:
+                end += timedelta(days=1)
+    if start is None or end is None:
+        return None
+
+    size_text = _text(node, "size", "fileSize")
+    try:
+        size = int(size_text) if size_text else 0
+    except ValueError:
+        size = 0
+    return RecordingMetadata(name, start, end, size)
+
+
+def _parse_file_info_page(xml_text: str) -> tuple[list[RecordingMetadata], bool | None]:
+    try:
+        root = XML.fromstring(xml_text)
+    except XML.ParseError as err:
+        raise CameraStageError("FILE_INFO_PARSE_ERROR") from err
+
+    files: list[RecordingMetadata] = []
+    for node in root.findall(".//FileInfo"):
+        item = _metadata_from_file_info(node)
+        if item is not None:
+            files.append(item)
+
+    finished_text = root.findtext(".//bFinished")
+    if finished_text is None:
+        finished_text = root.findtext(".//finished")
+    finished = None if finished_text is None else finished_text.strip() == "1"
+    return files, finished
+
+
+async def _list_recordings_file_info(
+    host: Host,
+    uid: str,
+    start: datetime,
+    end: datetime,
+) -> list[RecordingMetadata]:
+    """Use the cmd14/cmd15/cmd16 tuple already validated on this Argus 2E."""
+    open_xml = xmls.FileInfoListOpen.format(
+        uid=uid,
+        channel=0,
+        start_year=start.year,
+        start_month=start.month,
+        start_day=start.day,
+        start_hour=start.hour,
+        start_minute=start.minute,
+        start_second=start.second,
+        end_year=end.year,
+        end_month=end.month,
+        end_day=end.day,
+        end_hour=end.hour,
+        end_minute=end.minute,
+        end_second=end.second,
+    )
+    try:
+        open_response = await host.baichuan.send(
+            cmd_id=14,
+            body=open_xml,
+            ch_id=FILE_INFO_HEADER_CHANNEL_ID,
+        )
+    except (ReolinkError, OSError, TimeoutError):
+        raise CameraStageError("FILE_INFO_OPEN_ERROR") from None
+
+    try:
+        open_root = XML.fromstring(open_response)
+        handle_text = open_root.findtext(".//handle")
+        handle = int(handle_text) if handle_text else None
+    except (XML.ParseError, TypeError, ValueError):
+        handle = None
+    if handle is None:
+        raise CameraStageError("FILE_INFO_HANDLE_ERROR")
+
+    page_xml = xmls.FileInfoList.format(channel=0, handle=handle, uid=uid)
+    recordings: list[RecordingMetadata] = []
+    seen_names: set[str] = set()
+    try:
+        for page_index in range(MAX_FILE_INFO_PAGES):
             try:
-                key = (vod.file_name, vod.start_time, vod.end_time)
-            except (KeyError, TypeError, ValueError):
-                continue
-            if key in seen:
-                continue
-            seen.add(key)
-            files.append(vod)
-    return files
+                response = await host.baichuan.send(
+                    cmd_id=15,
+                    body=page_xml,
+                    ch_id=FILE_INFO_HEADER_CHANNEL_ID,
+                )
+            except (ReolinkError, OSError, TimeoutError) as err:
+                # Some firmwares signal end-of-list with a 400 after at least one page.
+                if page_index > 0 and getattr(err, "rspCode", None) == 400:
+                    break
+                raise CameraStageError("FILE_INFO_GET_ERROR") from None
+
+            page_files, finished = _parse_file_info_page(response)
+            for item in page_files:
+                if item.file_name in seen_names:
+                    continue
+                seen_names.add(item.file_name)
+                recordings.append(item)
+
+            if finished is True:
+                break
+            if not page_files or (
+                finished is None and len(page_files) < TYPICAL_FILE_INFO_PAGE_SIZE
+            ):
+                break
+    finally:
+        try:
+            await host.baichuan.send(
+                cmd_id=16,
+                body=page_xml,
+                ch_id=FILE_INFO_HEADER_CHANNEL_ID,
+                retry=1,
+            )
+        except (ReolinkError, OSError, TimeoutError):
+            _LOGGER.debug("FILE_INFO_CLOSE_ERROR")
+
+    return recordings
 
 
 async def async_find_recording_for_event(
@@ -169,8 +320,6 @@ async def async_find_recording_for_event(
             uid=uid,
             timeout=command_timeout,
         )
-        # Standalone Argus 2E omits channel UID metadata. Phase 2 proved the
-        # main camera UID is also the correct channel-0 UID for recording queries.
         prepare_standalone_channel_zero(host)
         host._uid[0] = uid
         connection = BoundBaichuanUdpConnection(
@@ -197,13 +346,8 @@ async def async_find_recording_for_event(
         day_start = datetime.combine(target_local.date(), time.min)
         day_end = datetime.combine(target_local.date(), time(23, 59, 59))
 
-        failure_stage = "RECORDING_SEARCH_ERROR"
-        _, vod_dict = await host.baichuan.search_vod_type(
-            0, day_start, day_end, stream="main"
-        )
-        candidate = select_recording_candidate(
-            target_local, _flatten_vod_files(vod_dict)
-        )
+        recordings = await _list_recordings_file_info(host, uid, day_start, day_end)
+        candidate = select_recording_candidate(target_local, list(recordings))
         if candidate is None:
             raise CameraStageError("RECORDING_MATCH_ERROR")
         return candidate
