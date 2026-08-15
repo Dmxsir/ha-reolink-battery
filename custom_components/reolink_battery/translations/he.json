@@ -5,24 +5,17 @@
       "user": {
         "title": "חשבון Reolink",
         "description": "התחבר כדי לגלות את מצלמות הסוללה. שלב זה אינו פונה למצלמה ואינו מעיר אותה.",
-        "data": {
-          "email": "דוא״ל החשבון",
-          "password": "סיסמת החשבון"
-        }
+        "data": {"email": "דוא״ל החשבון", "password": "סיסמת החשבון"}
       },
       "mfa": {
         "title": "אימות דו־שלבי",
         "description": "הזן את קוד האימות שנשלח על ידי Reolink.",
-        "data": {
-          "code": "קוד אימות"
-        }
+        "data": {"code": "קוד אימות"}
       },
       "device": {
         "title": "בחירת מצלמה",
         "description": "בחר את מצלמת הסוללה שברצונך להוסיף.",
-        "data": {
-          "uid": "מצלמה"
-        }
+        "data": {"uid": "מצלמה"}
       },
       "local": {
         "title": "פרטי התחברות מקומיים למצלמה",
@@ -53,9 +46,7 @@
       "init": {
         "title": "גשר התראות תנועה",
         "description": "ניתן לבחור את חיישן Last Notification של אפליקציית Home Assistant Companion בטלפון Android שמקבל את התראות Reolink. ההאזנה מתבצעת בתוך Home Assistant בלבד ואינה פונה למצלמה ואינה מעירה אותה.",
-        "data": {
-          "notification_entity": "ישות מקור ההתראות"
-        },
+        "data": {"notification_entity": "ישות מקור ההתראות"},
         "data_description": {
           "notification_entity": "בחר את חיישן Last Notification של Companion App. השאר ריק כדי להשבית את גשר ההתראות."
         }
@@ -71,11 +62,10 @@
       "wifi_signal": {"name": "עוצמת אות Wi-Fi"},
       "last_local_refresh": {"name": "רענון מקומי אחרון"}
     },
-    "binary_sensor": {
-      "charging": {"name": "בטעינה"}
-    },
+    "binary_sensor": {"charging": {"name": "בטעינה"}},
     "button": {
-      "refresh_device_status": {"name": "רענון מצב המצלמה"}
+      "refresh_device_status": {"name": "רענון מצב המצלמה"},
+      "find_pending_recording": {"name": "מצא הקלטה לאירוע הממתין"}
     }
   }
 }
