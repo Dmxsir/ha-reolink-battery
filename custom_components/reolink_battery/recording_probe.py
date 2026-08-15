@@ -54,6 +54,45 @@ class RecordingCandidate:
 
 
 @dataclass(slots=True)
+class FileInfoTrace:
+    """Secret-safe telemetry for one cmd14/cmd15/cmd16 transaction."""
+
+    open_attempted: bool = False
+    open_succeeded: bool = False
+    open_failure_type: str = ""
+    open_response_code: int | None = None
+    handle_present: bool = False
+    get_attempted: bool = False
+    get_page_index: int | None = None
+    get_pages_succeeded: int = 0
+    get_failure_type: str = ""
+    get_response_code: int | None = None
+    last_page_file_count: int | None = None
+    finished_flag: bool | None = None
+    close_attempted: bool = False
+    close_succeeded: bool = False
+    close_failure_type: str = ""
+    close_response_code: int | None = None
+
+
+class FileInfoListError(CameraStageError):
+    """FileInfoList failure carrying only non-secret protocol telemetry."""
+
+    def __init__(self, stage: str, trace: FileInfoTrace) -> None:
+        super().__init__(stage)
+        self.trace = trace
+        if stage == "FILE_INFO_OPEN_ERROR":
+            self.failure_type = trace.open_failure_type
+            self.response_code = trace.open_response_code
+        elif stage == "FILE_INFO_GET_ERROR":
+            self.failure_type = trace.get_failure_type
+            self.response_code = trace.get_response_code
+        else:
+            self.failure_type = ""
+            self.response_code = None
+
+
+@dataclass(slots=True)
 class RecordingProbeState:
     """Diagnostics state for explicit recording lookup tests."""
 
@@ -79,6 +118,11 @@ def probe_state(entry_id: str) -> RecordingProbeState:
 def clear_probe_state(entry_id: str) -> None:
     """Drop ephemeral probe telemetry on config-entry unload."""
     _PROBE_STATES.pop(entry_id, None)
+
+
+def _rsp_code(err: BaseException) -> int | None:
+    value = getattr(err, "rspCode", None)
+    return value if isinstance(value, int) else None
 
 
 def _interval_distance(target: datetime, start: datetime, end: datetime) -> float:
@@ -205,8 +249,11 @@ async def _list_recordings_file_info(
     uid: str,
     start: datetime,
     end: datetime,
+    *,
+    trace: FileInfoTrace | None = None,
 ) -> list[RecordingMetadata]:
     """Use the cmd14/cmd15/cmd16 tuple already validated on this Argus 2E."""
+    trace = trace or FileInfoTrace()
     open_xml = xmls.FileInfoListOpen.format(
         uid=uid,
         channel=0,
@@ -223,14 +270,18 @@ async def _list_recordings_file_info(
         end_minute=end.minute,
         end_second=end.second,
     )
+    trace.open_attempted = True
     try:
         open_response = await host.baichuan.send(
             cmd_id=14,
             body=open_xml,
             ch_id=FILE_INFO_HEADER_CHANNEL_ID,
         )
-    except (ReolinkError, OSError, TimeoutError):
-        raise CameraStageError("FILE_INFO_OPEN_ERROR") from None
+        trace.open_succeeded = True
+    except (ReolinkError, OSError, TimeoutError) as err:
+        trace.open_failure_type = type(err).__name__
+        trace.open_response_code = _rsp_code(err)
+        raise FileInfoListError("FILE_INFO_OPEN_ERROR", trace) from None
 
     try:
         open_root = XML.fromstring(open_response)
@@ -238,14 +289,17 @@ async def _list_recordings_file_info(
         handle = int(handle_text) if handle_text else None
     except (XML.ParseError, TypeError, ValueError):
         handle = None
+    trace.handle_present = handle is not None
     if handle is None:
-        raise CameraStageError("FILE_INFO_HANDLE_ERROR")
+        raise FileInfoListError("FILE_INFO_HANDLE_ERROR", trace)
 
     page_xml = xmls.FileInfoList.format(channel=0, handle=handle, uid=uid)
     recordings: list[RecordingMetadata] = []
     seen_names: set[str] = set()
     try:
         for page_index in range(MAX_FILE_INFO_PAGES):
+            trace.get_attempted = True
+            trace.get_page_index = page_index
             try:
                 response = await host.baichuan.send(
                     cmd_id=15,
@@ -253,12 +307,20 @@ async def _list_recordings_file_info(
                     ch_id=FILE_INFO_HEADER_CHANNEL_ID,
                 )
             except (ReolinkError, OSError, TimeoutError) as err:
+                trace.get_failure_type = type(err).__name__
+                trace.get_response_code = _rsp_code(err)
                 # Some firmwares signal end-of-list with a 400 after at least one page.
-                if page_index > 0 and getattr(err, "rspCode", None) == 400:
+                if page_index > 0 and trace.get_response_code == 400:
                     break
-                raise CameraStageError("FILE_INFO_GET_ERROR") from None
+                raise FileInfoListError("FILE_INFO_GET_ERROR", trace) from None
 
-            page_files, finished = _parse_file_info_page(response)
+            trace.get_pages_succeeded += 1
+            try:
+                page_files, finished = _parse_file_info_page(response)
+            except CameraStageError:
+                raise FileInfoListError("FILE_INFO_PARSE_ERROR", trace) from None
+            trace.last_page_file_count = len(page_files)
+            trace.finished_flag = finished
             for item in page_files:
                 if item.file_name in seen_names:
                     continue
@@ -272,6 +334,7 @@ async def _list_recordings_file_info(
             ):
                 break
     finally:
+        trace.close_attempted = True
         try:
             await host.baichuan.send(
                 cmd_id=16,
@@ -279,7 +342,10 @@ async def _list_recordings_file_info(
                 ch_id=FILE_INFO_HEADER_CHANNEL_ID,
                 retry=1,
             )
-        except (ReolinkError, OSError, TimeoutError):
+            trace.close_succeeded = True
+        except (ReolinkError, OSError, TimeoutError) as err:
+            trace.close_failure_type = type(err).__name__
+            trace.close_response_code = _rsp_code(err)
             _LOGGER.debug("FILE_INFO_CLOSE_ERROR")
 
     return recordings
