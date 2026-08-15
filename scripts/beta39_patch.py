@@ -75,11 +75,11 @@ beta20 = replace_once(
     "        trace.p2p_heartbeat_background_task_active = bool(\n"
     "            task is not None and not task.done()\n"
     "        )\n"
-    "        trace.p2p_heartbeat_fresh_tid_enabled = (\n"
-    "            self._p2p_heartbeat_fresh_tid_enabled\n"
+    "        trace.p2p_heartbeat_fresh_tid_enabled = bool(\n"
+    "            getattr(self, \"_p2p_heartbeat_fresh_tid_enabled\", False)\n"
     "        )\n"
     "        trace.p2p_heartbeat_unique_tid_count = len(\n"
-    "            self._p2p_heartbeat_tids\n"
+    "            getattr(self, \"_p2p_heartbeat_tids\", set())\n"
     "        )\n"
     "        if snapshot_pre_cmd13:\n",
     "heartbeat tid trace copy",
