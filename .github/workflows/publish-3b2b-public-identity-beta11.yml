@@ -1,0 +1,41 @@
+name: Publish 3B.2b public identity beta11
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-3b2b-public-identity-beta11.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install protocol dependencies
+        run: python -m pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe -v
+      - name: Validate JSON
+        run: python -m json.tool custom_components/reolink_battery/manifest.json >/dev/null && python -m json.tool custom_components/reolink_battery/strings.json >/dev/null && python -m json.tool custom_components/reolink_battery/translations/en.json >/dev/null && python -m json.tool custom_components/reolink_battery/translations/he.json >/dev/null
+      - name: Publish prerelease if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.1.2-beta.11 >/dev/null 2>&1; then
+            echo "Release already exists"
+            exit 0
+          fi
+          gh release create v0.1.2-beta.11 \
+            --target "${GITHUB_SHA}" \
+            --prerelease \
+            --title "Reolink Battery v0.1.2-beta.11" \
+            --notes "Milestone 3B.2b controlled FileInfoList identity probe. Keeps beta.10 transport/framing unchanged but removes the Argus name-to-Id remap. For the observed Argus FileInfo shape (path-like Id, absent fileName, short name), cmd13 now follows the public FileInfoList-download layout: the path-like recording value is used for both Id and fileName, while the short camera-returned name remains name. XML/Extension channelId stays logical channel 0; header stays channel 7, stream 0, msgNum16, class 0x6482. No streamType/fileType additions, cmd8 media transfer, automatic worker, queue removal, or Telegram."
