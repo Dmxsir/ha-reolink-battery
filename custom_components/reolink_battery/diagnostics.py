@@ -8,11 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
-from .recording_download_probe import (
-    IDENTITY_MAPPING,
-    ROUTING_LAYOUT,
-    download_prepare_state,
-)
+from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
 from .recording_probe import probe_state
 
 
@@ -150,7 +146,6 @@ async def async_get_config_entry_diagnostics(
                 "close_response_code": prepare.file_info_close_response_code,
             },
             "identity": {
-                "mapping": IDENTITY_MAPPING,
                 "id_present": prepare.identity_id_present,
                 "file_name_present": prepare.identity_file_name_present,
                 "name_present": prepare.identity_name_present,
@@ -203,7 +198,7 @@ async def async_get_config_entry_diagnostics(
             "full_media_download_attempted": False,
             "cmd8_attempted": False,
         },
-        "milestone": "3B.2b-argus-identity-remap-probe",
+        "milestone": "3B.2b-exact-fileinfo-identity-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }

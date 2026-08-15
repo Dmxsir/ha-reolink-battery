@@ -45,7 +45,6 @@ DOWNLOAD_STREAM_TYPE = 0
 MESSAGE_NUM_MODULUS = 1 << 16
 ACCEPTED_PREPARE_RESPONSE_CODES = frozenset({0, 200, 201, 300})
 ROUTING_LAYOUT = "file_download_ch_stream_msgnum16"
-IDENTITY_MAPPING = "argus_name_to_id__id_to_file_name"
 
 
 class DownloadPrepareError(CameraStageError):
@@ -258,35 +257,21 @@ def _looks_like_path(value: str) -> bool:
 def _resolve_download_identity(
     candidate: RecordingCandidate,
 ) -> tuple[int, str, str, str, RecordingIdentityTrace]:
-    """Resolve cmd13 identity, remapping the Argus path/name pair when required."""
+    """Resolve cmd13 fields while preserving exact FileInfo values when available."""
     exact_id = candidate.record_id
     exact_file_name = candidate.xml_file_name
     exact_name = candidate.display_name
 
-    # This Argus returns no <fileName>. Its <Id> is a full storage path while
-    # <name> is the separate short recording identity. The official SDK consumes
-    # recording identity and filename as distinct arguments. Keep the beta.9
-    # mapping for normal FileInfo responses, but for this exact shape send
-    # name -> cmd13 <Id> and path-like Id -> cmd13 <fileName>.
-    if exact_name and exact_id and not exact_file_name and _looks_like_path(exact_id):
-        record_id = exact_name
-        file_name = exact_id
-        display_name = exact_name
-    else:
-        record_id = exact_id or candidate.file_name
-        file_name = exact_file_name or candidate.file_name
-        display_name = (
-            exact_name
-            or os.path.basename(file_name.replace("\\", "/"))
-            or file_name
-        )
+    record_id = exact_id or candidate.file_name
+    file_name = exact_file_name or candidate.file_name
+    display_name = (
+        exact_name
+        or os.path.basename(file_name.replace("\\", "/"))
+        or file_name
+    )
 
     raw_channel = candidate.channel_id
-    xml_channel_id = (
-        raw_channel
-        if isinstance(raw_channel, int) and 0 <= raw_channel <= 255
-        else 0
-    )
+    xml_channel_id = raw_channel if isinstance(raw_channel, int) and 0 <= raw_channel <= 255 else 0
 
     trace = RecordingIdentityTrace(
         id_present=bool(exact_id),
@@ -323,7 +308,7 @@ def _download_xml(
     file_name: str,
     display_name: str,
 ) -> str:
-    """Build FileInfoList download body from the resolved recording identity."""
+    """Build FileInfoList download body from the exact FileInfo identity."""
     return (
         '<?xml version="1.0" encoding="UTF-8" ?>\n'
         '<body>\n<FileInfoList version="1.1">\n<FileInfo>\n'
@@ -360,7 +345,7 @@ def _build_cmd13_wire(
     uid: str,
     candidate: RecordingCandidate,
 ) -> tuple[bytes, Cmd13RequestMetadata, RecordingIdentityTrace]:
-    """Build cmd13 with beta.8 framing and beta.10 Argus identity remap."""
+    """Build cmd13 with beta.8 framing and exact selected FileInfo identity."""
     xml_channel_id, record_id, file_name, display_name, identity_trace = (
         _resolve_download_identity(candidate)
     )
@@ -414,7 +399,7 @@ async def async_prepare_download_for_event(
     resolve_timeout: float = 10.0,
     command_timeout: int = 30,
 ) -> DownloadPrepareResult:
-    """Find the event recording, send one remapped-identity cmd13 probe, then close."""
+    """Find the event recording, send one exact-identity cmd13 probe, then close."""
     lease = None
     host = None
     connection = None
