@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
-from .recording_download_probe import download_prepare_state
+from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
 from .recording_probe import probe_state
 
 
@@ -127,24 +127,30 @@ async def async_get_config_entry_diagnostics(
             "failure_stage": prepare.failure_stage or None,
             "failure_type": prepare.failure_type or None,
             "response_code": prepare.response_code,
-            "request_channel_id": prepare.request_channel_id,
-            "request_stream_type": prepare.request_stream_type,
-            "request_msg_num": prepare.request_msg_num,
+            "routing_layout": ROUTING_LAYOUT,
+            "request_header_channel_id": prepare.request_header_channel_id,
+            "request_message_id": prepare.request_message_id,
+            "request_full_message_id": prepare.request_full_message_id,
             "request_message_class": _hex_class(prepare.request_message_class),
             "request_body_length": prepare.request_body_length,
             "request_payload_offset": prepare.request_payload_offset,
             "response_message_class": _hex_class(prepare.response_message_class),
-            "response_channel_id": prepare.response_channel_id,
-            "response_stream_type": prepare.response_stream_type,
-            "response_msg_num": prepare.response_msg_num,
+            "response_header_channel_id": prepare.response_header_channel_id,
+            "response_message_id": prepare.response_message_id,
+            "response_full_message_id": prepare.response_full_message_id,
             "response_body_length": prepare.response_body_length,
             "response_payload_offset": prepare.response_payload_offset,
+            "routing_echo_match": (
+                prepare.response_present
+                and prepare.request_full_message_id is not None
+                and prepare.request_full_message_id == prepare.response_full_message_id
+            ),
             "first_payload_length": prepare.first_payload_length,
             "media_payload_observed": prepare.first_payload_length > 0,
             "full_media_download_attempted": False,
             "cmd8_attempted": False,
         },
-        "milestone": "3B.2b-frame-probe",
+        "milestone": "3B.2b-routing-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
