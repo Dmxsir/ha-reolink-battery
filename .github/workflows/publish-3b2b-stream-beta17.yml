@@ -1,0 +1,41 @@
+name: Publish 3B.2b stream beta17
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-3b2b-stream-beta17.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install protocol dependencies
+        run: python -m pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe tests.test_recording_download_beta12 tests.test_recording_download_beta13 tests.test_recording_download_beta14 tests.test_recording_download_beta15 tests.test_recording_download_beta16 tests.test_recording_download_beta17 -v
+      - name: Validate JSON
+        run: python -m json.tool custom_components/reolink_battery/manifest.json >/dev/null && python -m json.tool custom_components/reolink_battery/strings.json >/dev/null && python -m json.tool custom_components/reolink_battery/translations/en.json >/dev/null && python -m json.tool custom_components/reolink_battery/translations/he.json >/dev/null
+      - name: Publish prerelease if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.1.2-beta.17 >/dev/null 2>&1; then
+            echo "Release already exists"
+            exit 0
+          fi
+          gh release create v0.1.2-beta.17 \
+            --target "${GITHUB_SHA}" \
+            --prerelease \
+            --title "Reolink Battery v0.1.2-beta.17" \
+            --notes "Milestone 3B.2b cmd13 stream-shape probe. Keeps the physically accepted beta.16 request unchanged: Id-only FileInfo, no Extension, payload_offset 0, class 0x6482, header channel 7, stream 0 and msgNum16. After the accepted response, samples continuation frames in the same camera session until 8 seconds idle, 60 seconds hard limit, 2 MiB body sample, 256 frames, or a completion/error response. Diagnostics classify secret-safe XML/MP4/BCMedia shape, frame counts, response codes and any XML-reported size without exposing UID/path/name/payload bytes. No cmd8 request, final media file, automatic worker, queue removal, or Telegram."
