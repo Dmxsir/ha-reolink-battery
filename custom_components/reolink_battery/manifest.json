@@ -19,5 +19,5 @@
     "pycryptodomex==3.23.0",
     "reolink-aio==0.21.8"
   ],
-  "version": "0.1.2-beta.26"
+  "version": "0.1.2-beta.27"
 }
