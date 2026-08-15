@@ -18,7 +18,11 @@ from reolink_aio.exceptions import ReolinkError
 
 from .camera import CameraStageError, prepare_standalone_channel_zero
 from .events import CloudEvent
-from .recording_probe import _list_recordings_file_info, select_recording_candidate
+from .recording_probe import (
+    FILE_INFO_HEADER_CHANNEL_ID,
+    _list_recordings_file_info,
+    select_recording_candidate,
+)
 from .transport import (
     BAICHUAN_MAGIC,
     FILE_DOWNLOAD_MESSAGE_CLASS,
@@ -30,10 +34,11 @@ from .transport import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-DOWNLOAD_REQUEST_CHANNEL_ID = 1
-DOWNLOAD_STREAM_TYPE = 0
 DOWNLOAD_CMD_ID = 13
+DOWNLOAD_HEADER_CHANNEL_ID = FILE_INFO_HEADER_CHANNEL_ID
+MESSAGE_ID_MODULUS = 1 << 24
 ACCEPTED_PREPARE_RESPONSE_CODES = frozenset({0, 200, 201, 300})
+ROUTING_LAYOUT = "reolink_aio_ch_plus_message_id24"
 
 
 class DownloadPrepareError(CameraStageError):
@@ -55,9 +60,9 @@ class DownloadPrepareError(CameraStageError):
 class Cmd13RequestMetadata:
     """Non-secret metadata for the one raw cmd13 request."""
 
-    channel_id: int
-    stream_type: int
-    msg_num: int
+    header_channel_id: int
+    message_id: int
+    full_message_id: int
     message_class: int
     body_length: int
     payload_offset: int
@@ -90,16 +95,16 @@ class DownloadPrepareState:
     failure_stage: str = ""
     failure_type: str = ""
     response_code: int | None = None
-    request_channel_id: int | None = None
-    request_stream_type: int | None = None
-    request_msg_num: int | None = None
+    request_header_channel_id: int | None = None
+    request_message_id: int | None = None
+    request_full_message_id: int | None = None
     request_message_class: int | None = None
     request_body_length: int | None = None
     request_payload_offset: int | None = None
     response_message_class: int | None = None
-    response_channel_id: int | None = None
-    response_stream_type: int | None = None
-    response_msg_num: int | None = None
+    response_header_channel_id: int | None = None
+    response_message_id: int | None = None
+    response_full_message_id: int | None = None
     response_body_length: int | None = None
     response_payload_offset: int | None = None
     first_payload_length: int = 0
@@ -114,6 +119,7 @@ def download_prepare_state(entry_id: str) -> DownloadPrepareState:
 
 
 def _download_xml(uid: str, file_name: str) -> str:
+    """Keep the beta.5 FileInfoList body unchanged for the routing experiment."""
     basename = os.path.basename(file_name.replace("\\", "/")) or file_name
     return (
         '<?xml version="1.0" encoding="UTF-8" ?>\n'
@@ -128,6 +134,7 @@ def _download_xml(uid: str, file_name: str) -> str:
 
 
 def _binary_extension_xml() -> str:
+    """Keep the beta.5 binary Extension unchanged for the routing experiment."""
     return (
         '<?xml version="1.0" encoding="UTF-8" ?>\n'
         '<Extension version="1.1">\n'
@@ -137,43 +144,44 @@ def _binary_extension_xml() -> str:
     )
 
 
-def _next_download_msg_num(baichuan: Any) -> int:
-    """Allocate a 16-bit file-download message number from the current session."""
+def _next_download_message_id(baichuan: Any) -> int:
+    """Allocate exactly as pinned reolink-aio send(): 24-bit modulo counter."""
     current = int(getattr(baichuan, "_mess_id", 0))
-    msg_num = (current + 1) & 0xFFFF
-    if msg_num == 0:
-        msg_num = 1
-    baichuan._mess_id = msg_num
-    return msg_num
+    message_id = (current + 1) % MESSAGE_ID_MODULUS
+    baichuan._mess_id = message_id
+    return message_id
 
 
 def _build_cmd13_wire(
     baichuan: Any, uid: str, file_name: str
 ) -> tuple[bytes, Cmd13RequestMetadata]:
-    """Build the 0x6482/24-byte FileInfoList-download frame used for cmd13."""
+    """Build cmd13 using the routing layout proven by cmd14/15/16 on this Argus."""
     extension = _binary_extension_xml().encode("utf-8")
     payload = _download_xml(uid, file_name).encode("utf-8")
     encrypted_extension = baichuan._aes_encrypt(extension)
     encrypted_payload = baichuan._aes_encrypt(payload)
     body = encrypted_extension + encrypted_payload
-    msg_num = _next_download_msg_num(baichuan)
+    message_id = _next_download_message_id(baichuan)
+    routing = (
+        DOWNLOAD_HEADER_CHANNEL_ID.to_bytes(1, "little")
+        + message_id.to_bytes(3, "little")
+    )
+    full_message_id = int.from_bytes(routing, "little")
     payload_offset = len(encrypted_extension)
 
     header = (
         BAICHUAN_MAGIC
         + DOWNLOAD_CMD_ID.to_bytes(4, "little")
         + len(body).to_bytes(4, "little")
-        + DOWNLOAD_REQUEST_CHANNEL_ID.to_bytes(1, "little")
-        + DOWNLOAD_STREAM_TYPE.to_bytes(1, "little")
-        + msg_num.to_bytes(2, "little")
+        + routing
         + (0).to_bytes(2, "little")
         + FILE_DOWNLOAD_MESSAGE_CLASS.to_bytes(2, "little")
         + payload_offset.to_bytes(4, "little")
     )
     return header + body, Cmd13RequestMetadata(
-        channel_id=DOWNLOAD_REQUEST_CHANNEL_ID,
-        stream_type=DOWNLOAD_STREAM_TYPE,
-        msg_num=msg_num,
+        header_channel_id=DOWNLOAD_HEADER_CHANNEL_ID,
+        message_id=message_id,
+        full_message_id=full_message_id,
         message_class=FILE_DOWNLOAD_MESSAGE_CLASS,
         body_length=len(body),
         payload_offset=payload_offset,
@@ -191,7 +199,7 @@ async def async_prepare_download_for_event(
     resolve_timeout: float = 10.0,
     command_timeout: int = 30,
 ) -> DownloadPrepareResult:
-    """Find the event recording, send one native cmd13 frame, then close."""
+    """Find the event recording, send one cmd13 routing probe, then close."""
     lease = None
     host = None
     connection = None
@@ -250,7 +258,9 @@ async def async_prepare_download_for_event(
         wire, request = _build_cmd13_wire(host.baichuan, uid, candidate.file_name)
         try:
             response = await connection.send_file_download_probe(
-                wire, timeout=min(float(command_timeout), 15.0)
+                wire,
+                expected_full_message_id=request.full_message_id,
+                timeout=min(float(command_timeout), 15.0),
             )
         except TimeoutError:
             raise DownloadPrepareError(
