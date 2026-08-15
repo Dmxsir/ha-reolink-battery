@@ -19,21 +19,38 @@ class CloudEvent:
     alarm_time: datetime
     alarm_type: str
     ai_types: tuple[str, ...] = ()
+    source: str = "message_center"
+    device_name: str = ""
+    notification_post_time: datetime | None = None
+    title: str = ""
+    text: str = ""
 
     def as_storage(self) -> dict[str, object]:
         data = asdict(self)
         data["alarm_time"] = self.alarm_time.isoformat()
         data["ai_types"] = list(self.ai_types)
+        if self.notification_post_time is not None:
+            data["notification_post_time"] = self.notification_post_time.isoformat()
         return data
 
     @classmethod
     def from_storage(cls, data: dict[str, object]) -> CloudEvent:
+        notification_post_time = data.get("notification_post_time")
         return cls(
             event_id=str(data["event_id"]),
             uid=str(data["uid"]),
             alarm_time=parse_alarm_time(data["alarm_time"]),
             alarm_type=str(data.get("alarm_type") or ""),
             ai_types=tuple(str(value) for value in data.get("ai_types", [])),
+            source=str(data.get("source") or "message_center"),
+            device_name=str(data.get("device_name") or ""),
+            notification_post_time=(
+                parse_alarm_time(notification_post_time)
+                if notification_post_time is not None
+                else None
+            ),
+            title=str(data.get("title") or ""),
+            text=str(data.get("text") or ""),
         )
 
 
