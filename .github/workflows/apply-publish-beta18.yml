@@ -1,0 +1,217 @@
+name: Apply and publish beta18 cmd8 probe
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/apply-publish-beta18.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-validate-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Apply beta18 wiring and diagnostics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          button = Path("custom_components/reolink_battery/button.py")
+          text = button.read_text()
+          text = text.replace(
+              "from .recording_download_probe_beta17 import (",
+              "from .recording_download_probe_beta18 import (",
+          )
+          text = text.replace(
+              '"""Probe the accepted cmd13 and sample its same-session continuation."""',
+              '"""Probe accepted cmd13 then sample cmd8 media in the same session."""',
+          )
+          text = text.replace(
+              '"""Find the queued recording, issue cmd13, sample continuation, then close."""',
+              '"""Find recording, issue accepted cmd13 then bounded cmd8, then close."""',
+          )
+          button.write_text(text)
+
+          diagnostics = Path("custom_components/reolink_battery/diagnostics.py")
+          text = diagnostics.read_text()
+          text = text.replace(
+              "from .recording_download_probe_beta17 import stream_probe_state",
+              "from .recording_download_probe_beta18 import stream_probe_state",
+          )
+          text = text.replace(
+              '                "cmd8_frames": stream.cmd8_frames,\n'
+              '                "distinct_msg_num_count": stream.distinct_msg_num_count,',
+              '                "cmd8_frames": stream.cmd8_frames,\n'
+              '                "cmd8_attempted": stream.cmd8_attempted,\n'
+              '                "cmd8_request_msg_num": stream.cmd8_request_msg_num,\n'
+              '                "cmd8_request_body_length": stream.cmd8_request_body_length,\n'
+              '                "cmd8_request_payload_offset": stream.cmd8_request_payload_offset,\n'
+              '                "cmd8_first_response_code": stream.cmd8_first_response_code,\n'
+              '                "cmd8_first_body_length": stream.cmd8_first_body_length,\n'
+              '                "cmd8_first_kind": stream.cmd8_first_kind or None,\n'
+              '                "cmd8_xml_frames": stream.cmd8_xml_frames,\n'
+              '                "cmd8_media_frames": stream.cmd8_media_frames,\n'
+              '                "cmd8_unknown_frames": stream.cmd8_unknown_frames,\n'
+              '                "cmd8_media_observed": stream.cmd8_media_observed,\n'
+              '                "distinct_msg_num_count": stream.distinct_msg_num_count,',
+          )
+          text = text.replace(
+              '            "cmd8_attempted": False,',
+              '            "cmd8_attempted": stream.cmd8_attempted,',
+          )
+          text = text.replace(
+              '        "milestone": "3B.2b-cmd13-stream-shape-probe",',
+              '        "milestone": "3B.2b-cmd13-prepare-cmd8-media-shape-probe",',
+          )
+          diagnostics.write_text(text)
+
+          manifest = Path("custom_components/reolink_battery/manifest.json")
+          text = manifest.read_text().replace(
+              '"version": "0.1.2-beta.17"',
+              '"version": "0.1.2-beta.18"',
+          )
+          manifest.write_text(text)
+
+          probe = Path("custom_components/reolink_battery/recording_download_probe_beta18.py")
+          text = probe.read_text().replace(
+              ") -> base.FileDownloadFrameMetadata:",
+              ") -> beta17.transport_mod.FileDownloadFrameMetadata:",
+          )
+          probe.write_text(text)
+          PY
+
+          cat > tests/test_recording_download_beta18.py <<'PY'
+          """Focused beta.18 tests for cmd13 prepare followed by cmd8 media probe."""
+
+          from __future__ import annotations
+
+          import importlib
+          import sys
+          import types
+          import unittest
+          from datetime import datetime
+          from pathlib import Path
+
+          ROOT = Path(__file__).parents[1]
+          COMPONENT = ROOT / "custom_components" / "reolink_battery"
+          PACKAGE = "_reolink_battery_download_beta18_test"
+
+          package = types.ModuleType(PACKAGE)
+          package.__path__ = [str(COMPONENT)]
+          sys.modules[PACKAGE] = package
+          probe = importlib.import_module(f"{PACKAGE}.recording_download_probe_beta18")
+          recording_probe = importlib.import_module(f"{PACKAGE}.recording_probe")
+
+
+          class _FakeBaichuan:
+              def __init__(self, mess_id: int = 5) -> None:
+                  self._mess_id = mess_id
+                  self._connection = None
+
+              @staticmethod
+              def _aes_encrypt(data: bytes) -> bytes:
+                  return data
+
+
+          def _candidate():
+              return recording_probe.RecordingCandidate(
+                  file_name="/mnt/sda/recording.mp4",
+                  start_time=datetime(2026, 8, 15, 10, 22, 54),
+                  end_time=datetime(2026, 8, 15, 10, 23, 28),
+                  size=0,
+                  distance_seconds=4.792,
+                  record_id="/mnt/sda/recording.mp4",
+                  xml_file_name="",
+                  display_name="recording.mp4",
+                  channel_id=0,
+                  stream_type="mainStream",
+                  file_type="mp4",
+                  record_type="io, md",
+              )
+
+
+          class Cmd8ProbeTests(unittest.TestCase):
+              def test_cmd8_reuses_accepted_cmd13_body_with_fresh_msgnum(self):
+                  bc = _FakeBaichuan()
+                  cmd13, meta, _ = probe._beta16_build_cmd13_wire(
+                      bc, "ABC123", _candidate()
+                  )
+                  self.assertEqual(meta.msg_num, 6)
+                  cmd8, msg_num, body_length, payload_offset = (
+                      probe._build_cmd8_wire_from_cmd13(bc, cmd13)
+                  )
+                  self.assertEqual(msg_num, 7)
+                  self.assertEqual(bc._mess_id, 7)
+                  self.assertEqual(int.from_bytes(cmd8[4:8], "little"), 8)
+                  self.assertEqual(cmd8[12], 7)
+                  self.assertEqual(cmd8[13], 0)
+                  self.assertEqual(int.from_bytes(cmd8[14:16], "little"), 7)
+                  self.assertEqual(int.from_bytes(cmd8[18:20], "little"), 0x6482)
+                  self.assertEqual(payload_offset, 0)
+                  self.assertEqual(int.from_bytes(cmd8[20:24], "little"), 0)
+                  self.assertEqual(body_length, len(cmd13) - 24)
+                  self.assertEqual(cmd8[24:], cmd13[24:])
+
+              def test_trace_is_bounded_and_secret_safe(self):
+                  trace = probe._new_trace(attempted=True)
+                  self.assertTrue(trace.attempted)
+                  self.assertEqual(trace.sample_limit_bytes, 2 * 1024 * 1024)
+                  self.assertEqual(trace.sample_limit_frames, 512)
+                  self.assertFalse(trace.cmd8_attempted)
+                  self.assertFalse(trace.cmd8_media_observed)
+                  self.assertFalse(trace.raw_values_exposed)
+                  self.assertEqual(
+                      probe.CONTENT_LAYOUT,
+                      "cmd13_prepare_then_cmd8_id_only_no_extension_media_shape",
+                  )
+
+
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+      - name: Install protocol dependencies
+        run: python -m pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+      - name: Compile integration
+        run: python -m compileall -q custom_components/reolink_battery
+      - name: Run recording tests
+        run: python -m unittest tests.test_recording_probe tests.test_recording_download_probe tests.test_recording_download_beta12 tests.test_recording_download_beta13 tests.test_recording_download_beta14 tests.test_recording_download_beta15 tests.test_recording_download_beta16 tests.test_recording_download_beta17 tests.test_recording_download_beta18 -v
+      - name: Validate JSON
+        run: |
+          python -m json.tool custom_components/reolink_battery/manifest.json >/dev/null
+          python -m json.tool custom_components/reolink_battery/strings.json >/dev/null
+          python -m json.tool custom_components/reolink_battery/translations/en.json >/dev/null
+          python -m json.tool custom_components/reolink_battery/translations/he.json >/dev/null
+      - name: Commit beta18 wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/button.py \
+                  custom_components/reolink_battery/diagnostics.py \
+                  custom_components/reolink_battery/manifest.json \
+                  custom_components/reolink_battery/recording_download_probe_beta18.py \
+                  tests/test_recording_download_beta18.py
+          git commit -m "Wire beta18 cmd8 media-shape probe"
+          git push origin HEAD:feature/recording-worker-3b2
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.1.2-beta.18 >/dev/null 2>&1; then
+            echo "Release already exists"
+            exit 0
+          fi
+          gh release create v0.1.2-beta.18 \
+            --target "$(git rev-parse HEAD)" \
+            --prerelease \
+            --title "Reolink Battery v0.1.2-beta.18" \
+            --notes "Milestone 3B.2b controlled same-session cmd8 media-shape probe. Keeps the physically accepted cmd13 Id-only/no-Extension request unchanged. After cmd13 returns its XML FileInfo/handle/size response, sends cmd8 with the exact same encrypted Id-only body, class 0x6482, header channel 7, stream 0, payload_offset 0 and a fresh msgNum16. Samples up to 2 MiB / 512 frames, 8 s idle or 90 s hard limit and reports only secret-safe media/XML shape. No final recording file, cmd9, automatic worker, queue removal, or Telegram."
