@@ -230,8 +230,8 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
         trace = self._stream_trace
         first_future = protocol.arm_stream_probe(expected_msg_num, trace, self._observe_frame)
         started_at = self._loop.time()
-        next_p2p_heartbeat_at = started_at
         reason = ""
+        self._apply_p2p_heartbeat_trace(trace, snapshot_pre_cmd13=True)
         try:
             await self.send_without_wait(wire, cmd_id=13, timeout=min(timeout, 5.0))
             first = await asyncio.wait_for(
@@ -250,13 +250,6 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
             )
 
             while True:
-                now = self._loop.time()
-                if now >= next_p2p_heartbeat_at:
-                    trace.p2p_heartbeat_attempted = True
-                    if self._send_p2p_heartbeat():
-                        trace.p2p_heartbeat_count += 1
-                    next_p2p_heartbeat_at = now + beta20.P2P_HEARTBEAT_INTERVAL
-
                 if trace.expected_size_reached:
                     reason = "expected_size_reached"
                     break
@@ -287,6 +280,7 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
             trace.distinct_msg_num_count = len(protocol._stream_msg_nums)
             trace.remote_disconnect_observed = protocol.remote_disconnect_observed
             trace.connection_lost_exception_present = protocol.connection_lost_exception_present
+            self._apply_p2p_heartbeat_trace(trace)
             if not trace.termination_reason:
                 trace.termination_reason = reason or "collector_stopped"
             trace.elapsed_seconds = round(self._loop.time() - started_at, 3)

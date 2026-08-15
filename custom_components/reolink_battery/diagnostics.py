@@ -362,7 +362,7 @@ async def async_get_config_entry_diagnostics(
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "raw_path_exposed": False,
         },
-        "milestone": "3B.6-continuous-p2p-heartbeat",
+        "milestone": "3B.6-single-heartbeat-corrected",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }
