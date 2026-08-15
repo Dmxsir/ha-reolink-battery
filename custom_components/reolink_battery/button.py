@@ -1,7 +1,8 @@
-"""Manual local-status refresh button."""
+"""Manual battery-safe camera actions."""
 
 from __future__ import annotations
 
+import ipaddress
 from typing import TYPE_CHECKING
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
@@ -13,16 +14,28 @@ from . import (
     ReolinkBatteryConfigEntry,
     async_refresh_local_status,
 )
-from .const import CONF_UID, DOMAIN
+from .camera import CameraStageError
+from .const import (
+    CONF_DEVICE_PASSWORD,
+    CONF_DEVICE_USERNAME,
+    CONF_INTERFACE,
+    CONF_UID,
+    DOMAIN,
+)
+from .recording_probe import async_find_recording_for_event, probe_state
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 
-DESCRIPTION = ButtonEntityDescription(
+REFRESH_DESCRIPTION = ButtonEntityDescription(
     key="refresh_device_status",
     translation_key="refresh_device_status",
+)
+FIND_RECORDING_DESCRIPTION = ButtonEntityDescription(
+    key="find_pending_recording",
+    translation_key="find_pending_recording",
 )
 
 
@@ -31,8 +44,13 @@ async def async_setup_entry(
     entry: ReolinkBatteryConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Add the manual refresh button."""
-    async_add_entities((ReolinkRefreshDeviceStatusButton(entry),))
+    """Add explicit short-session buttons."""
+    async_add_entities(
+        (
+            ReolinkRefreshDeviceStatusButton(entry),
+            ReolinkFindPendingRecordingButton(entry),
+        )
+    )
 
 
 class ReolinkRefreshDeviceStatusButton(ButtonEntity):
@@ -40,7 +58,7 @@ class ReolinkRefreshDeviceStatusButton(ButtonEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    entity_description = DESCRIPTION
+    entity_description = REFRESH_DESCRIPTION
 
     def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
         self._entry = entry
@@ -56,3 +74,71 @@ class ReolinkRefreshDeviceStatusButton(ButtonEntity):
             await async_refresh_local_status(self.hass, self._entry)
         except LocalStatusRefreshError as err:
             raise HomeAssistantError(err.stage) from None
+
+
+class ReolinkFindPendingRecordingButton(ButtonEntity):
+    """Explicitly find the SD recording nearest the oldest pending phone event."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    entity_description = FIND_RECORDING_DESCRIPTION
+
+    def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_find_pending_recording"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._entry.data[CONF_UID])})
+
+    @property
+    def available(self) -> bool:
+        return any(
+            event.source == "android_notification"
+            for event in self._entry.runtime_data.coordinator.pending_events
+        )
+
+    async def async_press(self) -> None:
+        """Wake only on this explicit press, search one day, and close immediately."""
+        event = next(
+            (
+                item
+                for item in self._entry.runtime_data.coordinator.pending_events
+                if item.source == "android_notification"
+            ),
+            None,
+        )
+        if event is None:
+            raise HomeAssistantError("NO_PENDING_NOTIFICATION_EVENT")
+
+        state = probe_state(self._entry.entry_id)
+        state.attempted = True
+        state.success = False
+        state.event_time = event.notification_post_time or event.alarm_time
+        state.candidate_start = None
+        state.candidate_end = None
+        state.candidate_size = None
+        state.candidate_distance_seconds = None
+        state.candidate_name_present = False
+        state.failure_stage = ""
+
+        try:
+            async with self._entry.runtime_data.local_operation_lock:
+                candidate = await async_find_recording_for_event(
+                    event,
+                    self._entry.data[CONF_UID],
+                    self._entry.data[CONF_DEVICE_USERNAME],
+                    self._entry.data[CONF_DEVICE_PASSWORD],
+                    ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]),
+                    self.hass.config.time_zone,
+                )
+        except CameraStageError as err:
+            state.failure_stage = err.stage
+            raise HomeAssistantError(err.stage) from None
+
+        state.success = True
+        state.candidate_start = candidate.start_time
+        state.candidate_end = candidate.end_time
+        state.candidate_size = candidate.size
+        state.candidate_distance_seconds = candidate.distance_seconds
+        state.candidate_name_present = bool(candidate.file_name)
