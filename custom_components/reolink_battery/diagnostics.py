@@ -32,6 +32,7 @@ async def async_get_config_entry_diagnostics(
     recording = probe_state(entry.entry_id)
     prepare = download_prepare_state(entry.entry_id)
     stream = stream_probe_state(entry.entry_id)
+    worker = entry.runtime_data.recording_worker
     return {
         "device": {
             "model": entry.data.get(CONF_MODEL, ""),
@@ -281,7 +282,36 @@ async def async_get_config_entry_diagnostics(
             "full_media_download_attempted": stream.file_write_attempted,
             "cmd8_attempted": stream.cmd8_attempted,
         },
-        "milestone": "3B.2b-verified-atomic-mp4",
-        "camera_worker_enabled": False,
-        "automatic_recording_processing_enabled": False,
+        "recording_worker": {
+            "configured": worker is not None,
+            "enabled": bool(worker and worker.state.enabled),
+            "running": bool(worker and worker.state.running),
+            "pending_trigger": bool(worker and worker.state.pending_trigger),
+            "waiting_camera_closed": bool(worker and worker.state.waiting_camera_closed),
+            "settle_seconds": worker.state.settle_seconds if worker else None,
+            "attempts": worker.state.attempts if worker else 0,
+            "retries": worker.state.retries if worker else 0,
+            "completed": worker.state.completed if worker else 0,
+            "last_event_time": (
+                worker.state.last_event_time.isoformat()
+                if worker and worker.state.last_event_time else None
+            ),
+            "last_attempt_time": (
+                worker.state.last_attempt_time.isoformat()
+                if worker and worker.state.last_attempt_time else None
+            ),
+            "last_completed_time": (
+                worker.state.last_completed_time.isoformat()
+                if worker and worker.state.last_completed_time else None
+            ),
+            "last_failure_stage": (worker.state.last_failure_stage or None) if worker else None,
+            "last_failure_type": (worker.state.last_failure_type or None) if worker else None,
+            "last_file_saved": bool(worker and worker.state.last_file_saved),
+            "last_file_size": worker.state.last_file_size if worker else 0,
+            "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),
+            "raw_path_exposed": False,
+        },
+        "milestone": "3B.3-automatic-verified-recording-worker",
+        "camera_worker_enabled": worker is not None,
+        "automatic_recording_processing_enabled": worker is not None,
     }

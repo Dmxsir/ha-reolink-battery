@@ -46,6 +46,7 @@ from .device_status import (
 
 if TYPE_CHECKING:
     from .notification_bridge import NotificationBridge
+    from .recording_worker import RecordingWorker
 
 PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON)
 STORAGE_SENSOR_KEYS = ("storage_total", "storage_used", "storage_free")
@@ -68,6 +69,7 @@ class ReolinkBatteryRuntime:
     status: DeviceStatusCache
     local_operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     notification_bridge: NotificationBridge | None = None
+    recording_worker: RecordingWorker | None = None
 
 
 ReolinkBatteryConfigEntry = ConfigEntry[ReolinkBatteryRuntime]
@@ -122,9 +124,15 @@ async def async_setup_entry(
     notification_entity = getattr(entry, "options", {}).get(CONF_NOTIFICATION_ENTITY)
     if isinstance(notification_entity, str) and notification_entity:
         from .notification_bridge import NotificationBridge
+        from .recording_worker import RecordingWorker
+
+        runtime.recording_worker = RecordingWorker(hass, entry)
 
         async def ingest_notification(event) -> int:
-            return await coordinator.async_ingest_events([event])
+            added = await coordinator.async_ingest_events([event])
+            if added and runtime.recording_worker is not None:
+                runtime.recording_worker.notify()
+            return added
 
         initial_notification_event = next(
             (
@@ -150,6 +158,17 @@ async def async_setup_entry(
     entry.async_create_background_task(
         hass, coordinator.async_run(), "reolink_battery cloud event polling"
     )
+    if runtime.recording_worker is not None:
+        entry.async_create_background_task(
+            hass,
+            runtime.recording_worker.async_run(),
+            "reolink_battery verified recording worker",
+        )
+        if any(
+            event.source == "android_notification"
+            for event in coordinator.pending_events
+        ):
+            runtime.recording_worker.notify()
     return True
 
 
@@ -259,5 +278,7 @@ async def async_unload_entry(
         return False
     if entry.runtime_data.notification_bridge is not None:
         entry.runtime_data.notification_bridge.stop()
+    if entry.runtime_data.recording_worker is not None:
+        await entry.runtime_data.recording_worker.async_shutdown()
     await entry.runtime_data.coordinator.async_shutdown()
     return True
