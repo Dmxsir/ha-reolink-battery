@@ -1,10 +1,15 @@
 """Automatic camera-closed settle -> verified recording download worker.
 
-The worker is deliberately event-driven.  It never polls the sleeping camera.
+The worker is deliberately event-driven. It never polls the sleeping camera.
 A newly queued Android notification wakes only this in-memory worker; the worker
 waits for recording finalization with no camera session open, then reuses the
-physically validated beta.22 cmd13 -> handle-bound cmd8 full-high path.  A queue
+physically validated beta.22 cmd13 -> handle-bound cmd8 full-high path. A queue
 item is removed only after an atomically finalized MP4 is present on disk.
+
+Events that exhaust their bounded retry set are deferred for the lifetime of the
+current config-entry runtime so they cannot block newer motion events. Deferred
+events stay in the persistent queue and are retried after a config-entry reload
+or Home Assistant restart.
 """
 
 from __future__ import annotations
@@ -46,9 +51,11 @@ class RecordingWorkerState:
     attempts: int = 0
     retries: int = 0
     completed: int = 0
+    deferred_count: int = 0
     last_event_time: datetime | None = None
     last_attempt_time: datetime | None = None
     last_completed_time: datetime | None = None
+    last_deferred_event_time: datetime | None = None
     last_failure_stage: str = ""
     last_failure_type: str = ""
     last_file_saved: bool = False
@@ -71,6 +78,7 @@ class RecordingWorker:
         self._entry = entry
         self._trigger = asyncio.Event()
         self._stopped = asyncio.Event()
+        self._deferred_event_ids: set[str] = set()
         self.state = RecordingWorkerState()
 
     def notify(self) -> None:
@@ -85,13 +93,23 @@ class RecordingWorker:
         self._trigger.set()
 
     def _oldest_android_event(self) -> CloudEvent | None:
+        """Return oldest Android event not deferred in this runtime."""
         return next(
             (
                 event
                 for event in self._entry.runtime_data.coordinator.pending_events
                 if event.source == "android_notification"
+                and event.event_id not in self._deferred_event_ids
             ),
             None,
+        )
+
+    def _defer_event(self, event: CloudEvent) -> None:
+        """Defer a failed event without deleting it from persistent storage."""
+        self._deferred_event_ids.add(event.event_id)
+        self.state.deferred_count = len(self._deferred_event_ids)
+        self.state.last_deferred_event_time = (
+            event.notification_post_time or event.alarm_time
         )
 
     async def _wait_camera_closed(self, seconds: float) -> bool:
@@ -226,7 +244,9 @@ class RecordingWorker:
                     return
                 if attempt:
                     self.state.retries += 1
-                    delay = RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)]
+                    delay = RETRY_DELAYS_SECONDS[
+                        min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)
+                    ]
                     if not await self._wait_camera_closed(delay):
                         return
                 if await self._process_once(event):
@@ -234,10 +254,14 @@ class RecordingWorker:
                     break
 
             if not completed:
-                # Keep the event pending.  Do not loop forever and repeatedly
-                # wake a battery camera; a later notification/reload can trigger
-                # another bounded attempt set.
-                return
+                # Keep the failed event pending, but defer it for this runtime so
+                # it cannot head-of-line block a newer motion event. A config-entry
+                # reload or HA restart clears the in-memory deferral and retries it.
+                self._defer_event(event)
+
+            # Continue to the next non-deferred pending event in the same trigger.
+            # This preserves one serialized camera worker and never opens sessions
+            # during settle/retry waits.
             event = self._oldest_android_event()
 
     async def async_run(self) -> None:
