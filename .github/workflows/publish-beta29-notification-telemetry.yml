@@ -1,0 +1,105 @@
+name: Publish beta.29 notification telemetry
+
+on:
+  push:
+    branches:
+      - beta29-notification-telemetry
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: beta29-notification-telemetry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Apply beta.29 diagnostics and version
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          diagnostics_path = Path("custom_components/reolink_battery/diagnostics.py")
+          diagnostics = diagnostics_path.read_text()
+
+          old_import = "from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID\n"
+          new_import = old_import + "from .events import parse_alarm_time\n"
+          assert old_import in diagnostics, "expected diagnostics import not found"
+          if "from .events import parse_alarm_time" not in diagnostics:
+              diagnostics = diagnostics.replace(old_import, new_import, 1)
+
+          old_helper = '''def _hex_class(value: int | None) -> str | None:\n    return f"0x{value:04x}" if isinstance(value, int) else None\n\n\n'''
+          new_helper = '''def _hex_class(value: int | None) -> str | None:\n    return f"0x{value:04x}" if isinstance(value, int) else None\n\n\ndef _safe_post_time(value: object):\n    if value is None:\n        return None\n    try:\n        return parse_alarm_time(value)\n    except (TypeError, ValueError, OverflowError, OSError):\n        return None\n\n\n'''
+          assert old_helper in diagnostics, "expected diagnostics helper not found"
+          diagnostics = diagnostics.replace(old_helper, new_helper, 1)
+
+          old_runtime = '''    worker = entry.runtime_data.recording_worker\n    return {\n'''
+          new_runtime = '''    worker = entry.runtime_data.recording_worker\n    notification_state = hass.states.get(bridge.entity_id) if bridge else None\n    notification_attrs = notification_state.attributes if notification_state else {}\n    sensor_post_time = _safe_post_time(notification_attrs.get("post_time"))\n    return {\n'''
+          assert old_runtime in diagnostics, "expected diagnostics runtime block not found"
+          diagnostics = diagnostics.replace(old_runtime, new_runtime, 1)
+
+          old_bridge = '''            "last_event_queued": bool(bridge and bridge.last_event_queued),\n            "duplicate_rejected": bool(bridge and bridge.last_duplicate_rejected),\n        },\n'''
+          new_bridge = '''            "last_event_queued": bool(bridge and bridge.last_event_queued),\n            "duplicate_rejected": bool(bridge and bridge.last_duplicate_rejected),\n            "state_change_count": bridge.state_change_count if bridge else 0,\n            "reolink_match_count": bridge.reolink_match_count if bridge else 0,\n            "last_state_change_time": (\n                bridge.last_state_change_time.isoformat()\n                if bridge and bridge.last_state_change_time\n                else None\n            ),\n            "last_observed_post_time": (\n                bridge.last_observed_post_time.isoformat()\n                if bridge and bridge.last_observed_post_time\n                else None\n            ),\n            "previous_observed_post_time": (\n                bridge.previous_observed_post_time.isoformat()\n                if bridge and bridge.previous_observed_post_time\n                else None\n            ),\n            "last_post_time_changed": (\n                bridge.last_post_time_changed if bridge else None\n            ),\n            "event_id_fingerprint": (\n                bridge.last_event_id_fingerprint if bridge else ""\n            ),\n            "sensor_state_available": notification_state is not None,\n            "sensor_last_updated": (\n                notification_state.last_updated.isoformat()\n                if notification_state is not None\n                else None\n            ),\n            "sensor_post_time": (\n                sensor_post_time.isoformat() if sensor_post_time else None\n            ),\n            "sensor_post_time_matches_last_observed": (\n                sensor_post_time == bridge.last_observed_post_time\n                if bridge and sensor_post_time and bridge.last_observed_post_time\n                else None\n            ),\n            "sensor_package_is_reolink": (\n                notification_attrs.get("package") == "com.mcu.reolink"\n                if notification_state is not None\n                else None\n            ),\n        },\n'''
+          assert old_bridge in diagnostics, "expected notification diagnostics block not found"
+          diagnostics = diagnostics.replace(old_bridge, new_bridge, 1)
+          diagnostics_path.write_text(diagnostics)
+
+          manifest_path = Path("custom_components/reolink_battery/manifest.json")
+          manifest = json.loads(manifest_path.read_text())
+          assert manifest["version"] == "0.1.2-beta.28"
+          manifest["version"] = "0.1.2-beta.29"
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+      - name: Verify beta.29 source
+        run: |
+          python -m compileall -q custom_components/reolink_battery
+          python -m unittest tests.test_notification_bridge
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("custom_components/reolink_battery/manifest.json").read_text())
+          assert manifest["version"] == "0.1.2-beta.29"
+
+          bridge = Path("custom_components/reolink_battery/notification_bridge.py").read_text()
+          diagnostics = Path("custom_components/reolink_battery/diagnostics.py").read_text()
+          assert "state_change_count" in bridge
+          assert "last_post_time_changed" in bridge
+          assert "event_id_fingerprint" in diagnostics
+          assert "sensor_post_time_matches_last_observed" in diagnostics
+          assert "cmd_id=14" in Path("custom_components/reolink_battery/recording_probe.py").read_text()
+          PY
+
+      - name: Commit beta.29 source
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/notification_bridge.py custom_components/reolink_battery/diagnostics.py custom_components/reolink_battery/manifest.json
+          git commit -m "Add notification telemetry for beta.29" || true
+          git push origin HEAD:beta29-notification-telemetry
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v0.1.2-beta.29
+          TARGET_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; leaving existing release untouched"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --target "$TARGET_SHA" \
+            --prerelease \
+            --title "$TAG" \
+            --notes "Milestone 3B.5 notification-ingestion diagnostic follow-up. Based directly on beta.28 behavior. Adds secret-safe Home Assistant Companion Last Notification telemetry: listener state-change count, matched Reolink count, HA state-change time, current and previous Android post_time, whether post_time changed, a short one-way event-id fingerprint, current HA sensor last_updated/post_time, and comparison between the sensor snapshot and the bridge observation. This is diagnostic-only for notification ingestion: queue identity/deduplication, 60-second settle, cmd14 retry ownership, cmd13/cmd8 transfer, P2P heartbeat, verified atomic MP4 persistence, worker retries/deferral, and media event handoff are unchanged. No guessed cmd9 Stop Download command is introduced in beta.29."
