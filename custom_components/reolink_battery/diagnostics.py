@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
 from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
+from .recording_download_probe_beta17 import stream_probe_state
 from .recording_probe import probe_state
 
 
@@ -30,6 +31,7 @@ async def async_get_config_entry_diagnostics(
     bridge = entry.runtime_data.notification_bridge
     recording = probe_state(entry.entry_id)
     prepare = download_prepare_state(entry.entry_id)
+    stream = stream_probe_state(entry.entry_id)
     return {
         "device": {
             "model": entry.data.get(CONF_MODEL, ""),
@@ -194,11 +196,43 @@ async def async_get_config_entry_diagnostics(
                 and prepare.request_msg_num == prepare.response_msg_num
             ),
             "first_payload_length": prepare.first_payload_length,
-            "media_payload_observed": prepare.first_payload_length > 0,
+            "first_body_present": prepare.first_payload_length > 0,
+            "stream_probe": {
+                "attempted": stream.attempted,
+                "frame_count": stream.frame_count,
+                "continuation_observed": stream.frame_count > 1,
+                "total_body_bytes": stream.total_body_bytes,
+                "cmd13_frames": stream.cmd13_frames,
+                "cmd8_frames": stream.cmd8_frames,
+                "distinct_msg_num_count": stream.distinct_msg_num_count,
+                "max_body_length": stream.max_body_length,
+                "response_codes": list(stream.response_codes),
+                "completion_code": stream.completion_code,
+                "termination_reason": stream.termination_reason or None,
+                "elapsed_seconds": stream.elapsed_seconds,
+                "first_frame_kind": stream.first_frame_kind or None,
+                "xml_frames": stream.xml_frames,
+                "media_frames": stream.media_frames,
+                "mp4_frames": stream.mp4_frames,
+                "bcmedia_frames": stream.bcmedia_frames,
+                "unknown_frames": stream.unknown_frames,
+                "aes_decrypted_frames": stream.aes_decrypted_frames,
+                "media_bytes_observed": stream.media_bytes_observed,
+                "xml_reported_size": stream.xml_reported_size,
+                "xml_file_info_present": stream.xml_file_info_present,
+                "xml_handle_present": stream.xml_handle_present,
+                "xml_binary_data_present": stream.xml_binary_data_present,
+                "sample_limit_bytes": stream.sample_limit_bytes,
+                "sample_limit_frames": stream.sample_limit_frames,
+                "sample_limit_reached": stream.termination_reason
+                in {"byte_limit", "frame_limit"},
+                "raw_values_exposed": False,
+            },
+            "media_payload_observed": stream.media_frames > 0,
             "full_media_download_attempted": False,
             "cmd8_attempted": False,
         },
-        "milestone": "3B.2b-exact-fileinfo-identity-probe",
+        "milestone": "3B.2b-cmd13-stream-shape-probe",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
