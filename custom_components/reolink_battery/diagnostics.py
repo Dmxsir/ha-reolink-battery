@@ -21,6 +21,7 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return no credentials, tokens, network addresses, or session material."""
     coordinator = entry.runtime_data.coordinator
+    bridge = entry.runtime_data.notification_bridge
     return {
         "device": {
             "model": entry.data.get(CONF_MODEL, ""),
@@ -56,6 +57,22 @@ async def async_get_config_entry_diagnostics(
             "last_event_uid_match": coordinator.last_event_uid_match,
             "last_event_queued": coordinator.last_event_queued,
         },
-        "milestone": "3A",
+        "notification_bridge": {
+            "configured": bridge is not None,
+            "listener_active": bool(bridge and bridge.active),
+            "last_reolink_notification_time": (
+                bridge.last_reolink_notification_time.isoformat()
+                if bridge and bridge.last_reolink_notification_time
+                else None
+            ),
+            "last_reolink_notification_camera": (
+                bridge.last_reolink_notification_camera if bridge else ""
+            ),
+            "last_event_matched": bool(bridge and bridge.last_event_matched),
+            "last_camera_mapped": bool(bridge and bridge.last_camera_mapped),
+            "last_event_queued": bool(bridge and bridge.last_event_queued),
+            "duplicate_rejected": bool(bridge and bridge.last_duplicate_rejected),
+        },
+        "milestone": "3B.1",
         "camera_worker_enabled": False,
     }
