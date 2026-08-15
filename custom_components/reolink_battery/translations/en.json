@@ -65,7 +65,8 @@
     "binary_sensor": {"charging": {"name": "Charging"}},
     "button": {
       "refresh_device_status": {"name": "Refresh device status"},
-      "find_pending_recording": {"name": "Find pending recording"}
+      "find_pending_recording": {"name": "Find pending recording"},
+      "prepare_pending_recording_download": {"name": "Prepare pending recording download"}
     }
   }
 }
