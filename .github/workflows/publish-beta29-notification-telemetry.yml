@@ -1,0 +1,123 @@
+name: Publish beta.29 notification telemetry
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta29-notification-telemetry.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Apply beta.29 source changes
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          bridge_path = Path("custom_components/reolink_battery/notification_bridge.py")
+          bridge = bridge_path.read_text()
+          bridge = bridge.replace(
+              "from datetime import datetime\n",
+              "from datetime import UTC, datetime\n",
+              1,
+          )
+
+          old_init = '''        self.last_event_queued = False\n        self.last_duplicate_rejected = False\n'''
+          new_init = '''        self.last_event_queued = False\n        self.last_duplicate_rejected = False\n        # beta.29 diagnostic-only telemetry. These fields never affect event\n        # identity, queueing, camera wake, or recording download behavior.\n        self.sensor_state_change_count = 0\n        self.matched_notification_update_count = 0\n        self.last_sensor_state_change_time: datetime | None = None\n        self.last_notification_post_time_ms: int | None = None\n        self.last_post_time_changed: bool | None = None\n        self.last_event_fingerprint = \"\"\n        self.last_processing_lag_seconds: float | None = None\n        self.telemetry_restored_from_pending = False\n'''
+          assert old_init in bridge, "beta28 bridge init anchor not found"
+          bridge = bridge.replace(old_init, new_init, 1)
+
+          old_restore = '''            self.last_event_matched = True\n            self.last_camera_mapped = bool(self.last_reolink_notification_camera)\n            self.last_event_queued = True\n'''
+          new_restore = '''            self.last_event_matched = True\n            self.last_camera_mapped = bool(self.last_reolink_notification_camera)\n            self.last_event_queued = True\n            restored_time = initial_event.notification_post_time or initial_event.alarm_time\n            self.last_notification_post_time_ms = round(restored_time.timestamp() * 1000)\n            self.last_event_fingerprint = initial_event.event_id.removeprefix(\"android:\")[:12]\n            self.telemetry_restored_from_pending = True\n'''
+          assert old_restore in bridge, "beta28 bridge restore anchor not found"
+          bridge = bridge.replace(old_restore, new_restore, 1)
+
+          old_process = '''    async def async_process_attributes(self, attributes: Mapping[str, Any]) -> bool:\n        \"\"\"Match, normalize and persist one notification update.\"\"\"\n        event = notification_event_from_attributes(\n            attributes,\n            expected_device_name=self._expected_device_name,\n            uid=self._uid,\n        )\n        if event is None:\n            # Last Notification is a phone-wide sensor. Unrelated app updates\n            # must not erase the last successfully matched Reolink telemetry.\n            return False\n\n        self.last_event_matched = True\n        self.last_camera_mapped = True\n        self.last_reolink_notification_time = event.notification_post_time\n        self.last_reolink_notification_camera = event.device_name\n        added = await self._ingest_event(event)\n        self.last_event_queued = bool(added)\n        self.last_duplicate_rejected = not bool(added)\n        return bool(added)\n'''
+          new_process = '''    async def async_process_attributes(self, attributes: Mapping[str, Any]) -> bool:\n        \"\"\"Match, normalize and persist one notification update.\"\"\"\n        observed_at = datetime.now(UTC)\n        self.sensor_state_change_count += 1\n        self.last_sensor_state_change_time = observed_at\n\n        event = notification_event_from_attributes(\n            attributes,\n            expected_device_name=self._expected_device_name,\n            uid=self._uid,\n        )\n        if event is None:\n            # Last Notification is a phone-wide sensor. Unrelated app updates\n            # must not erase the last successfully matched Reolink telemetry.\n            return False\n\n        self.matched_notification_update_count += 1\n        post_time = event.notification_post_time or event.alarm_time\n        post_time_ms = round(post_time.timestamp() * 1000)\n        previous_post_time_ms = self.last_notification_post_time_ms\n        self.last_post_time_changed = (\n            previous_post_time_ms is None or post_time_ms != previous_post_time_ms\n        )\n        self.last_notification_post_time_ms = post_time_ms\n        self.last_event_fingerprint = event.event_id.removeprefix(\"android:\")[:12]\n        self.last_processing_lag_seconds = round(\n            max(0.0, (observed_at - post_time).total_seconds()), 3\n        )\n        self.telemetry_restored_from_pending = False\n\n        self.last_event_matched = True\n        self.last_camera_mapped = True\n        self.last_reolink_notification_time = event.notification_post_time\n        self.last_reolink_notification_camera = event.device_name\n        added = await self._ingest_event(event)\n        self.last_event_queued = bool(added)\n        self.last_duplicate_rejected = not bool(added)\n        return bool(added)\n'''
+          assert old_process in bridge, "beta28 bridge process anchor not found"
+          bridge = bridge.replace(old_process, new_process, 1)
+          bridge_path.write_text(bridge)
+
+          diag_path = Path("custom_components/reolink_battery/diagnostics.py")
+          diag = diag_path.read_text()
+          old_diag = '''            \"last_event_queued\": bool(bridge and bridge.last_event_queued),\n            \"duplicate_rejected\": bool(bridge and bridge.last_duplicate_rejected),\n        },\n'''
+          new_diag = '''            \"last_event_queued\": bool(bridge and bridge.last_event_queued),\n            \"duplicate_rejected\": bool(bridge and bridge.last_duplicate_rejected),\n            \"sensor_state_change_count\": bridge.sensor_state_change_count if bridge else 0,\n            \"matched_notification_update_count\": (\n                bridge.matched_notification_update_count if bridge else 0\n            ),\n            \"last_sensor_state_change_time\": (\n                bridge.last_sensor_state_change_time.isoformat()\n                if bridge and bridge.last_sensor_state_change_time\n                else None\n            ),\n            \"last_notification_post_time_ms\": (\n                bridge.last_notification_post_time_ms if bridge else None\n            ),\n            \"last_post_time_changed\": (\n                bridge.last_post_time_changed if bridge else None\n            ),\n            \"last_event_fingerprint\": (\n                bridge.last_event_fingerprint if bridge else \"\"\n            ),\n            \"last_processing_lag_seconds\": (\n                bridge.last_processing_lag_seconds if bridge else None\n            ),\n            \"telemetry_restored_from_pending\": bool(\n                bridge and bridge.telemetry_restored_from_pending\n            ),\n        },\n'''
+          assert old_diag in diag, "beta28 diagnostics bridge anchor not found"
+          diag = diag.replace(old_diag, new_diag, 1)
+          diag = diag.replace(
+              '"milestone": "3B.5-event-only-media-handoff"',
+              '"milestone": "3B.5-notification-telemetry"',
+              1,
+          )
+          diag_path.write_text(diag)
+
+          tests_path = Path("tests/test_notification_bridge.py")
+          tests = tests_path.read_text()
+          test_anchor = '''    async def test_pending_android_event_restores_runtime_telemetry_after_reload(self):\n'''
+          assert test_anchor in tests, "notification test anchor not found"
+          extra_tests = '''    async def test_beta29_tracks_sensor_updates_and_post_time_changes(self):\n        queue = events.EventQueue()\n\n        async def ingest(event):\n            return 1 if queue.enqueue(event) else 0\n\n        listener = bridge.NotificationBridge(\n            _FakeHass(), \"sensor.phone_last_notification\", \"atv\", \"camera-1\", ingest\n        )\n        self.assertTrue(await listener.async_process_attributes(REAL_NOTIFICATION))\n        first_fingerprint = listener.last_event_fingerprint\n        self.assertEqual(listener.sensor_state_change_count, 1)\n        self.assertEqual(listener.matched_notification_update_count, 1)\n        self.assertTrue(listener.last_post_time_changed)\n        self.assertEqual(listener.last_notification_post_time_ms, 1786709128188)\n        self.assertTrue(first_fingerprint)\n        self.assertIsNotNone(listener.last_sensor_state_change_time)\n        self.assertIsNotNone(listener.last_processing_lag_seconds)\n\n        self.assertFalse(await listener.async_process_attributes(REAL_NOTIFICATION))\n        self.assertEqual(listener.sensor_state_change_count, 2)\n        self.assertEqual(listener.matched_notification_update_count, 2)\n        self.assertFalse(listener.last_post_time_changed)\n        self.assertEqual(listener.last_event_fingerprint, first_fingerprint)\n        self.assertTrue(listener.last_duplicate_rejected)\n\n        newer = {**REAL_NOTIFICATION, \"post_time\": 1786709129188}\n        self.assertTrue(await listener.async_process_attributes(newer))\n        self.assertEqual(listener.sensor_state_change_count, 3)\n        self.assertEqual(listener.matched_notification_update_count, 3)\n        self.assertTrue(listener.last_post_time_changed)\n        self.assertEqual(listener.last_notification_post_time_ms, 1786709129188)\n        self.assertNotEqual(listener.last_event_fingerprint, first_fingerprint)\n\n    async def test_beta29_counts_unrelated_sensor_update_without_overwriting_match(self):\n        queue = events.EventQueue()\n\n        async def ingest(event):\n            return 1 if queue.enqueue(event) else 0\n\n        listener = bridge.NotificationBridge(\n            _FakeHass(), \"sensor.phone_last_notification\", \"atv\", \"camera-1\", ingest\n        )\n        self.assertTrue(await listener.async_process_attributes(REAL_NOTIFICATION))\n        saved_post_time = listener.last_notification_post_time_ms\n        self.assertFalse(\n            await listener.async_process_attributes(\n                {\n                    \"package\": \"com.example.other\",\n                    \"android.title\": \"Other\",\n                    \"android.text\": \"Not Reolink\",\n                    \"post_time\": 1786709130000,\n                }\n            )\n        )\n        self.assertEqual(listener.sensor_state_change_count, 2)\n        self.assertEqual(listener.matched_notification_update_count, 1)\n        self.assertEqual(listener.last_notification_post_time_ms, saved_post_time)\n\n'''
+          tests = tests.replace(test_anchor, extra_tests + test_anchor, 1)
+          tests_path.write_text(tests)
+
+          manifest_path = Path("custom_components/reolink_battery/manifest.json")
+          manifest = json.loads(manifest_path.read_text())
+          assert manifest["version"] == "0.1.2-beta.28"
+          manifest["version"] = "0.1.2-beta.29"
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+      - name: Validate beta.29
+        run: |
+          python -m pip install --upgrade pip
+          pip install pycryptodomex==3.23.0 reolink-aio==0.21.8
+          python -m compileall -q custom_components/reolink_battery
+          python -m unittest tests.test_notification_bridge tests.test_recording_probe tests.test_recording_download_probe tests.test_recording_download_beta12
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("custom_components/reolink_battery/manifest.json").read_text())
+          assert manifest["version"] == "0.1.2-beta.29"
+          bridge = Path("custom_components/reolink_battery/notification_bridge.py").read_text()
+          assert "sensor_state_change_count" in bridge
+          assert "last_post_time_changed" in bridge
+          assert "last_event_fingerprint" in bridge
+          diag = Path("custom_components/reolink_battery/diagnostics.py").read_text()
+          assert '"milestone": "3B.5-notification-telemetry"' in diag
+          PY
+
+      - name: Commit beta.29 source
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/notification_bridge.py custom_components/reolink_battery/diagnostics.py custom_components/reolink_battery/manifest.json tests/test_notification_bridge.py
+          git commit -m "Add beta.29 notification bridge telemetry"
+          git push origin HEAD:feature/recording-worker-3b2
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v0.1.2-beta.29
+          TARGET_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          gh release create "$TAG" \
+            --target "$TARGET_SHA" \
+            --prerelease \
+            --title "$TAG" \
+            --notes "Milestone 3B.5 diagnostic-only notification telemetry on top of beta.28. Adds secret-safe counters and timestamps showing every Companion Last Notification sensor state change, matched Reolink updates, whether Android post_time changed, a short SHA-256 event fingerprint, processing lag, and whether telemetry was merely restored from a pending queue item. Event identity, deduplication, queue semantics, camera wake, FileInfo retry control, cmd13/cmd8 download transport, recording worker timing, file verification, Home Assistant Media handoff, and Telegram automation behavior are unchanged. No cmd9 is introduced in this build."
