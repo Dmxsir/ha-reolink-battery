@@ -233,7 +233,9 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
         reason = ""
         self._apply_p2p_heartbeat_trace(trace, snapshot_pre_cmd13=True)
         try:
-            await self.send_without_wait(wire, cmd_id=13, timeout=min(timeout, 5.0))
+            await self._send_reliable_download_packet(
+                wire, cmd_id=13, response_future=first_future
+            )
             first = await asyncio.wait_for(
                 asyncio.shield(first_future), timeout=max(float(timeout), 1.0)
             )
@@ -243,10 +245,9 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
 
             cmd8_wire, _msg_num, _body_len = self._build_full_high_cmd8()
             trace.cmd8_attempted = True
-            await self.send_without_wait(
-                cmd8_wire,
-                cmd_id=8,
-                timeout=min(max(float(timeout), 1.0), 5.0),
+            cmd8_delivery = protocol.arm_cmd8_delivery_future()
+            await self._send_reliable_download_packet(
+                cmd8_wire, cmd_id=8, response_future=cmd8_delivery
             )
 
             while True:
@@ -281,6 +282,7 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
             trace.remote_disconnect_observed = protocol.remote_disconnect_observed
             trace.connection_lost_exception_present = protocol.connection_lost_exception_present
             self._apply_p2p_heartbeat_trace(trace)
+            self._apply_udp_reliability_trace(trace)
             if not trace.termination_reason:
                 trace.termination_reason = reason or "collector_stopped"
             trace.elapsed_seconds = round(self._loop.time() - started_at, 3)

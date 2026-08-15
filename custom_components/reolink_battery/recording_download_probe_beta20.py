@@ -16,6 +16,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from reolink_aio.baichuan.udp_protocol import MTU
 from reolink_aio.baichuan.util import (
     calc_crc,
     decrypt_udp_baichuan,
@@ -29,6 +30,8 @@ from .recording_probe import RecordingCandidate
 
 CONTENT_LAYOUT = "cmd13_prepare_cmd8_p2p_heartbeat_full_transfer_shape"
 P2P_HEARTBEAT_INTERVAL = 1.0
+RELIABLE_UDP_ACK_TIMEOUT = 0.5
+RELIABLE_UDP_MAX_RETRANSMITS = 2
 STREAM_IDLE_TIMEOUT = 30.0
 STREAM_HARD_TIMEOUT = 240.0
 STREAM_SAMPLE_MAX_BYTES = 16 * 1024 * 1024
@@ -49,6 +52,25 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     proactive_cmd234_count: int = 0
     remote_disconnect_observed: bool = False
     connection_lost_exception_present: bool = False
+    cmd13_udp_seq: int | None = None
+    cmd13_udp_ack_received: bool = False
+    cmd13_udp_ack_delay_ms: float | None = None
+    cmd13_udp_retransmit_count: int = 0
+    cmd8_udp_seq: int | None = None
+    cmd8_udp_ack_received: bool = False
+    cmd8_udp_ack_delay_ms: float | None = None
+    cmd8_udp_retransmit_count: int = 0
+    udp_bc_packets_received: int = 0
+    udp_seq_gap_events: int = 0
+    udp_missing_packet_count: int = 0
+    udp_out_of_order_packets: int = 0
+    udp_duplicate_packets: int = 0
+    udp_reorder_buffer_peak: int = 0
+    udp_ack_sent_count: int = 0
+    udp_ack_with_gap_bitmap_count: int = 0
+    udp_last_contiguous_seq: int | None = None
+    udp_max_ack_delay_ms: float | None = None
+    udp_seq_at_remote_disconnect: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,13 +170,120 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
     """Stream observer with secret-safe remote-disconnect classification."""
 
     def __init__(self, *args, **kwargs) -> None:
+        self._reliable_ack_callback = kwargs.pop("reliable_ack_callback", None)
         super().__init__(*args, **kwargs)
         self.remote_disconnect_observed = False
         self.connection_lost_exception_present = False
+        self.udp_bc_packets_received = 0
+        self.udp_seq_gap_events = 0
+        self.udp_missing_packet_count = 0
+        self.udp_out_of_order_packets = 0
+        self.udp_duplicate_packets = 0
+        self.udp_reorder_buffer_peak = 0
+        self.udp_ack_sent_count = 0
+        self.udp_ack_with_gap_bitmap_count = 0
+        self.udp_last_contiguous_seq: int | None = None
+        self.udp_seq_at_remote_disconnect: int | None = None
+        self._missing_seq_ids_seen: set[int] = set()
+        self._cmd8_delivery_future: asyncio.Future[bool] | None = None
+
+
+    def arm_cmd8_delivery_future(self) -> asyncio.Future[bool]:
+        """Return a future completed by the first accepted cmd8 stream frame."""
+        future = self._cmd8_delivery_future
+        if future is not None and not future.done():
+            raise RuntimeError("cmd8 delivery future already armed")
+        self._cmd8_delivery_future = self._loop.create_future()
+        return self._cmd8_delivery_future
+
+    def clear_stream_probe(self) -> None:
+        future = self._cmd8_delivery_future
+        if future is not None and not future.done():
+            future.cancel()
+        self._cmd8_delivery_future = None
+        super().clear_stream_probe()
+
+    def _observe_stream_frame(self, raw: bytes) -> None:
+        trace = self._stream_trace
+        before = trace.cmd8_frames if trace is not None else 0
+        super()._observe_stream_frame(raw)
+        trace = self._stream_trace
+        future = self._cmd8_delivery_future
+        if (
+            trace is not None
+            and trace.cmd8_frames > before
+            and future is not None
+            and not future.done()
+        ):
+            future.set_result(True)
+
+    def parse_udp_ack(self, port: int) -> None:
+        data = self._udp_data
+        if len(data) >= 28:
+            payload_size = int.from_bytes(data[24:28], "little")
+            message_length = 28 + payload_size
+            if len(data) >= message_length:
+                client_id = int.from_bytes(data[4:8], "little")
+                if client_id == self.client_id:
+                    base_seq = int.from_bytes(data[16:20], "little")
+                    payload = data[28:message_length]
+                    callback = self._reliable_ack_callback
+                    if callback is not None:
+                        callback(base_seq, payload)
+        super().parse_udp_ack(port)
+
+    def parse_udp_bc(self, port: int) -> None:
+        data = self._udp_data
+        if len(data) >= 20:
+            client_id = int.from_bytes(data[4:8], "little")
+            seq_id = int.from_bytes(data[12:16], "little")
+            if client_id == self.client_id:
+                self.udp_bc_packets_received += 1
+                expected = self._recv_seq_id + 1
+                if seq_id <= self._recv_seq_id:
+                    self.udp_duplicate_packets += 1
+                elif seq_id > expected:
+                    self.udp_seq_gap_events += 1
+                    self.udp_out_of_order_packets += 1
+                    missing = set(range(expected, seq_id))
+                    newly_seen = missing - self._missing_seq_ids_seen
+                    self.udp_missing_packet_count += len(newly_seen)
+                    self._missing_seq_ids_seen.update(newly_seen)
+        try:
+            super().parse_udp_bc(port)
+        finally:
+            self.udp_reorder_buffer_peak = max(
+                self.udp_reorder_buffer_peak, len(self._seq_data)
+            )
+            self.udp_last_contiguous_seq = (
+                self._recv_seq_id if self._recv_seq_id >= 0 else None
+            )
+
+    def send_ack(self) -> None:
+        will_send = (
+            self._transport is not None
+            and self.host_id is not None
+            and self._recv_seq_id >= 0
+        )
+        gap_bitmap = False
+        if will_send and self._seq_data:
+            highest = max(self._seq_data)
+            gap_bitmap = any(
+                seq_id not in self._seq_data
+                for seq_id in range(self._recv_seq_id + 1, highest)
+            )
+        super().send_ack()
+        if will_send:
+            self.udp_ack_sent_count += 1
+            if gap_bitmap:
+                self.udp_ack_with_gap_bitmap_count += 1
 
     def parse_udp_connection(self, port: int) -> None:
         if _packet_is_remote_disconnect(self._udp_data):
             self.remote_disconnect_observed = True
+            self.udp_seq_at_remote_disconnect = (
+                self._recv_seq_id if self._recv_seq_id >= 0 else None
+            )
         super().parse_udp_connection(port)
 
     def connection_lost(self, exc: Exception | None = None) -> None:
@@ -174,6 +303,12 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         self._p2p_heartbeat_first_sent_at: float | None = None
         self._p2p_heartbeat_total_count = 0
         self._p2p_heartbeat_started_after_handoff = False
+        self._reliable_ack_waiters: dict[int, asyncio.Future[bool]] = {}
+        self._reliable_sent_at: dict[int, float] = {}
+        self._reliable_ack_delays_ms: dict[int, float] = {}
+        self._reliable_acked_seq_ids: set[int] = set()
+        self._reliable_command_seq: dict[int, int] = {}
+        self._reliable_command_retransmits: dict[int, int] = {}
 
     async def _create_connection(self):
         handoff = self._take_handoff_socket()
@@ -193,6 +328,7 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
                     self.cancel_ack_timeout,
                     self._push_callback,
                     self._close_callback,
+                    reliable_ack_callback=self._observe_udp_ack,
                 ),
                 sock=sock,
             )
@@ -205,6 +341,118 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             self._apply_handoff_protocol(protocol, lease)
             self._p2p_heartbeat_tid = self._handoff_transaction_id
         return transport, protocol
+
+
+    def _observe_udp_ack(self, base_seq: int, payload: bytes) -> None:
+        """Resolve tracked command delivery from cumulative/bitmap UDP ACKs."""
+        now = self._loop.time()
+        for seq_id, sent_at in tuple(self._reliable_sent_at.items()):
+            acknowledged = seq_id <= base_seq
+            if not acknowledged and seq_id > base_seq:
+                offset = seq_id - base_seq - 1
+                acknowledged = offset < len(payload) and payload[offset] != 0
+            if not acknowledged:
+                continue
+            if seq_id not in self._reliable_acked_seq_ids:
+                self._reliable_acked_seq_ids.add(seq_id)
+                self._reliable_ack_delays_ms[seq_id] = round(
+                    max(0.0, now - sent_at) * 1000.0, 3
+                )
+            future = self._reliable_ack_waiters.get(seq_id)
+            if future is not None and not future.done():
+                future.set_result(True)
+
+    async def _send_reliable_download_packet(
+        self,
+        data: bytes,
+        *,
+        cmd_id: int,
+        response_future: asyncio.Future[Any] | None = None,
+        ack_timeout: float = RELIABLE_UDP_ACK_TIMEOUT,
+        max_retransmits: int = RELIABLE_UDP_MAX_RETRANSMITS,
+    ) -> int:
+        """Send one BC command with bounded same-sequence UDP retransmission."""
+        if not self.connection_open:
+            await self.connect()
+        transport = self._transport
+        if transport is None:
+            raise ConnectionError("reliable UDP transport is not open")
+
+        async with self._mutex:
+            udp_header = await self._construct_udp_header(len(data))
+            packet = udp_header + data
+            if len(packet) > MTU - 20:
+                raise RuntimeError("reliable download command unexpectedly requires UDP fragmentation")
+            seq_id = int.from_bytes(udp_header[12:16], "little")
+            ack_future: asyncio.Future[bool] = self._loop.create_future()
+            self._reliable_ack_waiters[seq_id] = ack_future
+            self._reliable_sent_at[seq_id] = self._loop.time()
+            self._reliable_command_seq[cmd_id] = seq_id
+            transport.sendto(packet, (self._host, self._port))
+
+        retransmits = 0
+        try:
+            while True:
+                waiters: list[asyncio.Future[Any]] = [ack_future]
+                if response_future is not None:
+                    waiters.append(response_future)
+                await asyncio.wait(
+                    waiters,
+                    timeout=max(float(ack_timeout), 0.05),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if ack_future.done() or (
+                    response_future is not None and response_future.done()
+                ):
+                    break
+                if retransmits >= max_retransmits or not self.connection_open:
+                    break
+                retransmits += 1
+                # Retransmit the exact same UDP packet: same BC command and seq_id.
+                transport.sendto(packet, (self._host, self._port))
+        finally:
+            self._reliable_command_retransmits[cmd_id] = retransmits
+            self._reliable_ack_waiters.pop(seq_id, None)
+        return seq_id
+
+    def _apply_udp_reliability_trace(self, trace: P2PHeartbeatProbeTrace) -> None:
+        """Copy command ACK and receive-gap telemetry into the public trace."""
+        cmd13_seq = self._reliable_command_seq.get(13)
+        cmd8_seq = self._reliable_command_seq.get(8)
+        trace.cmd13_udp_seq = cmd13_seq
+        trace.cmd13_udp_ack_received = (
+            cmd13_seq is not None and cmd13_seq in self._reliable_acked_seq_ids
+        )
+        trace.cmd13_udp_ack_delay_ms = (
+            self._reliable_ack_delays_ms.get(cmd13_seq)
+            if cmd13_seq is not None
+            else None
+        )
+        trace.cmd13_udp_retransmit_count = self._reliable_command_retransmits.get(13, 0)
+        trace.cmd8_udp_seq = cmd8_seq
+        trace.cmd8_udp_ack_received = (
+            cmd8_seq is not None and cmd8_seq in self._reliable_acked_seq_ids
+        )
+        trace.cmd8_udp_ack_delay_ms = (
+            self._reliable_ack_delays_ms.get(cmd8_seq)
+            if cmd8_seq is not None
+            else None
+        )
+        trace.cmd8_udp_retransmit_count = self._reliable_command_retransmits.get(8, 0)
+        delays = list(self._reliable_ack_delays_ms.values())
+        trace.udp_max_ack_delay_ms = max(delays) if delays else None
+        protocol = self._protocol
+        if isinstance(protocol, _P2PHeartbeatProbeProtocol):
+            trace.udp_bc_packets_received = protocol.udp_bc_packets_received
+            trace.udp_seq_gap_events = protocol.udp_seq_gap_events
+            trace.udp_missing_packet_count = protocol.udp_missing_packet_count
+            trace.udp_out_of_order_packets = protocol.udp_out_of_order_packets
+            trace.udp_duplicate_packets = protocol.udp_duplicate_packets
+            trace.udp_reorder_buffer_peak = protocol.udp_reorder_buffer_peak
+            trace.udp_ack_sent_count = protocol.udp_ack_sent_count
+            trace.udp_ack_with_gap_bitmap_count = protocol.udp_ack_with_gap_bitmap_count
+            trace.udp_last_contiguous_seq = protocol.udp_last_contiguous_seq
+            trace.udp_seq_at_remote_disconnect = protocol.udp_seq_at_remote_disconnect
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:
         packet, transaction_id = super()._construct_udp_mess(body)
@@ -364,7 +612,9 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         reason = ""
         self._apply_p2p_heartbeat_trace(trace, snapshot_pre_cmd13=True)
         try:
-            await self.send_without_wait(wire, cmd_id=13, timeout=min(timeout, 5.0))
+            await self._send_reliable_download_packet(
+                wire, cmd_id=13, response_future=first_future
+            )
             first = await asyncio.wait_for(
                 asyncio.shield(first_future), timeout=max(float(timeout), 1.0)
             )
@@ -374,10 +624,9 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
                 return first
 
             trace.cmd8_attempted = True
-            await self.send_without_wait(
-                self._cmd8_wire,
-                cmd_id=8,
-                timeout=min(max(float(timeout), 1.0), 5.0),
+            cmd8_delivery = protocol.arm_cmd8_delivery_future()
+            await self._send_reliable_download_packet(
+                self._cmd8_wire, cmd_id=8, response_future=cmd8_delivery
             )
 
             while True:
@@ -417,6 +666,7 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
                 protocol.connection_lost_exception_present
             )
             self._apply_p2p_heartbeat_trace(trace)
+            self._apply_udp_reliability_trace(trace)
             if not trace.termination_reason:
                 trace.termination_reason = reason or "collector_stopped"
             trace.elapsed_seconds = round(self._loop.time() - started_at, 3)
