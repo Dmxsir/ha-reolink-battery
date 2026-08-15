@@ -24,6 +24,7 @@ from .const import (
 )
 from .recording_download_probe import (
     apply_file_info_trace,
+    apply_identity_trace,
     async_prepare_download_for_event,
     download_prepare_state,
 )
@@ -155,7 +156,7 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Probe cmd13 routing for the pending recording without cmd8."""
+    """Probe cmd13 with the exact FileInfo identity, without cmd8."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -179,7 +180,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Find the queued recording, issue one cmd13 routing probe, then close."""
+        """Find the queued recording, issue one exact-identity cmd13, then close."""
         event = next(
             (
                 item
@@ -232,6 +233,28 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.file_info_close_succeeded = False
         state.file_info_close_failure_type = ""
         state.file_info_close_response_code = None
+        state.identity_id_present = False
+        state.identity_file_name_present = False
+        state.identity_name_present = False
+        state.identity_id_length = 0
+        state.identity_file_name_length = 0
+        state.identity_name_length = 0
+        state.identity_id_equals_file_name = None
+        state.identity_id_equals_name = None
+        state.identity_file_name_equals_name = None
+        state.identity_id_looks_like_path = False
+        state.identity_file_name_looks_like_path = False
+        state.identity_xml_channel_id_present = False
+        state.identity_xml_channel_id_value = None
+        state.identity_stream_type_present = False
+        state.identity_stream_type_value = None
+        state.identity_file_type_present = False
+        state.identity_file_type_value = None
+        state.identity_record_type_present = False
+        state.identity_record_type_value = None
+        state.identity_used_exact_id = False
+        state.identity_used_exact_file_name = False
+        state.identity_used_exact_name = False
 
         try:
             async with self._entry.runtime_data.local_operation_lock:
@@ -252,6 +275,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
             raise HomeAssistantError(err.stage) from None
 
         apply_file_info_trace(state, result.file_info_trace)
+        apply_identity_trace(state, result.identity_trace)
         state.candidate_start = result.candidate_start
         state.candidate_end = result.candidate_end
         state.candidate_distance_seconds = result.candidate_distance_seconds
