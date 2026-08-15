@@ -8,7 +8,6 @@ BETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_pr
 BETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"
 WORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"
 DIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"
-MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
 
 
 class Beta37InclusiveRxAckTests(unittest.TestCase):
@@ -37,16 +36,14 @@ class Beta37InclusiveRxAckTests(unittest.TestCase):
         self.assertIn("udp_current_missing_packet_count_at_disconnect", source)
         self.assertIn("current_window - set(self._seq_data)", source)
 
-    def test_diagnostics_and_version(self):
+    def test_beta37_diagnostics_contract_survives_later_versions(self):
         diagnostics = DIAGNOSTICS.read_text()
         for token in (
             "udp_ack_inclusive_highest_enabled",
             "udp_ack_inclusive_highest_count",
             "udp_current_missing_packet_count_at_disconnect",
-            "3B.11-inclusive-rx-ack-bitmap",
         ):
             self.assertIn(token, diagnostics)
-        self.assertIn('"version": "0.1.2-beta.37"', MANIFEST.read_text())
 
 
 if __name__ == "__main__":
