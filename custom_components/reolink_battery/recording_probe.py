@@ -30,6 +30,10 @@ DEFAULT_MATCH_TOLERANCE = timedelta(seconds=120)
 FILE_INFO_HEADER_CHANNEL_ID = 7
 MAX_FILE_INFO_PAGES = 10
 TYPICAL_FILE_INFO_PAGE_SIZE = 40
+# A freshly authenticated battery camera can transiently reject cmd14 while its
+# SD/recording service is still becoming ready. Retry only cmd14 and only while
+# the already authenticated Baichuan session remains open; do not wake/reconnect.
+FILE_INFO_OPEN_RETRY_DELAYS_SECONDS = (1.5, 2.5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,17 +332,28 @@ async def _list_recordings_file_info(
         end_second=end.second,
     )
     trace.open_attempted = True
-    try:
-        open_response = await host.baichuan.send(
-            cmd_id=14,
-            body=open_xml,
-            ch_id=FILE_INFO_HEADER_CHANNEL_ID,
-        )
-        trace.open_succeeded = True
-    except (ReolinkError, OSError, TimeoutError) as err:
-        trace.open_failure_type = type(err).__name__
-        trace.open_response_code = _rsp_code(err)
-        raise FileInfoListError("FILE_INFO_OPEN_ERROR", trace) from None
+    open_response: str | None = None
+    for attempt in range(len(FILE_INFO_OPEN_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            open_response = await host.baichuan.send(
+                cmd_id=14,
+                body=open_xml,
+                ch_id=FILE_INFO_HEADER_CHANNEL_ID,
+            )
+            trace.open_succeeded = True
+            break
+        except (ReolinkError, OSError, TimeoutError) as err:
+            trace.open_failure_type = type(err).__name__
+            trace.open_response_code = _rsp_code(err)
+            if attempt >= len(FILE_INFO_OPEN_RETRY_DELAYS_SECONDS):
+                raise FileInfoListError("FILE_INFO_OPEN_ERROR", trace) from None
+            connection = getattr(host.baichuan, "_connection", None)
+            if connection is not None and not getattr(connection, "connection_open", False):
+                raise FileInfoListError("FILE_INFO_OPEN_ERROR", trace) from None
+            await asyncio.sleep(FILE_INFO_OPEN_RETRY_DELAYS_SECONDS[attempt])
+
+    if open_response is None:
+        raise FileInfoListError("FILE_INFO_OPEN_ERROR", trace)
 
     try:
         open_root = XML.fromstring(open_response)
