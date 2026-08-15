@@ -20,7 +20,6 @@ from .const import (
     CONF_DEVICE_PASSWORD,
     CONF_DEVICE_USERNAME,
     CONF_INTERFACE,
-    CONF_TELEGRAM_NOTIFY_ENTITY,
     CONF_UID,
 )
 
@@ -56,14 +55,8 @@ class RecordingWorkerState:
     last_file_size: int = 0
     last_ready_event_fired: bool = False
     waiting_camera_closed: bool = False
-    telegram_configured: bool = False
-    telegram_send_attempted: bool = False
-    telegram_send_succeeded: bool = False
-    telegram_path_allowed: bool | None = None
-    telegram_service_available: bool | None = None
-    telegram_last_failure_stage: str = ""
-    telegram_last_failure_type: str = ""
-    telegram_last_send_time: datetime | None = None
+    last_media_source_id: str = ""
+    last_media_content_id_present: bool = False
 
 
 class RecordingWorker:
@@ -119,54 +112,6 @@ class RecordingWorker:
         age = (datetime.now(UTC) - event_time.astimezone(UTC)).total_seconds()
         return await self._wait_camera_closed(max(RECORDING_SETTLE_SECONDS - age, 0.0))
 
-    async def _async_send_telegram(self, final_path: Path, event: CloudEvent) -> None:
-        """Send one already-verified MP4 through Home Assistant Telegram Bot."""
-        entity_id = self._entry.options.get(CONF_TELEGRAM_NOTIFY_ENTITY)
-        state = self.state
-        state.telegram_configured = isinstance(entity_id, str) and bool(entity_id)
-        state.telegram_send_attempted = False
-        state.telegram_send_succeeded = False
-        state.telegram_path_allowed = None
-        state.telegram_service_available = None
-        state.telegram_last_failure_stage = ""
-        state.telegram_last_failure_type = ""
-        if not state.telegram_configured:
-            return
-
-        state.telegram_send_attempted = True
-        path = str(final_path)
-        state.telegram_path_allowed = self._hass.config.is_allowed_path(path)
-        if not state.telegram_path_allowed:
-            state.telegram_last_failure_stage = "TELEGRAM_FILE_PATH_NOT_ALLOWED"
-            return
-
-        state.telegram_service_available = self._hass.services.has_service(
-            "telegram_bot", "send_video"
-        )
-        if not state.telegram_service_available:
-            state.telegram_last_failure_stage = "TELEGRAM_SERVICE_UNAVAILABLE"
-            return
-
-        camera_name = event.device_name or self._entry.title
-        try:
-            await self._hass.services.async_call(
-                "telegram_bot",
-                "send_video",
-                {
-                    "entity_id": entity_id,
-                    "file": path,
-                    "caption": f"🎥 תנועה זוהתה במצלמה {camera_name}",
-                    "parse_mode": "plain_text",
-                },
-                blocking=True,
-            )
-        except Exception as err:  # noqa: BLE001 - delivery must not invalidate recording.
-            state.telegram_last_failure_stage = "TELEGRAM_SEND_ERROR"
-            state.telegram_last_failure_type = type(err).__name__
-            return
-        state.telegram_send_succeeded = True
-        state.telegram_last_send_time = datetime.now(UTC)
-
     async def _process_once(self, event: CloudEvent) -> bool:
         """Run one closed-on-entry session and commit only a verified MP4."""
         # Keep protocol-heavy imports lazy: normal HA startup never contacts the
@@ -186,7 +131,14 @@ class RecordingWorker:
         self.state.last_file_size = 0
         self.state.last_ready_event_fired = False
 
-        output_dir = Path(self._hass.config.path("reolink_battery", "recordings"))
+        media_dirs = self._hass.config.media_dirs
+        if not media_dirs:
+            self.state.last_failure_stage = "MEDIA_DIRECTORY_UNAVAILABLE"
+            return False
+        media_source_id = "local" if "local" in media_dirs else next(iter(media_dirs))
+        output_dir = Path(media_dirs[media_source_id]) / "reolink_battery"
+        self.state.last_media_source_id = media_source_id
+        self.state.last_media_content_id_present = False
         try:
             async with self._entry.runtime_data.local_operation_lock:
                 result = await async_prepare_download_for_event(
@@ -240,6 +192,12 @@ class RecordingWorker:
         self.state.last_file_saved = True
         self.state.last_file_size = expected_size
 
+        media_content_id = (
+            f"media-source://media_source/{media_source_id}/"
+            f"reolink_battery/{final_path.name}"
+        )
+        self.state.last_media_content_id_present = True
+
         self._hass.bus.async_fire(
             RECORDING_READY_EVENT,
             {
@@ -249,11 +207,11 @@ class RecordingWorker:
                 "alarm_time": event.alarm_time.isoformat(),
                 "source": event.source,
                 "file_path": str(final_path),
+                "media_content_id": media_content_id,
                 "file_size": expected_size,
             },
         )
         self.state.last_ready_event_fired = True
-        await self._async_send_telegram(final_path, event)
         return True
 
     async def _process_trigger(self) -> None:

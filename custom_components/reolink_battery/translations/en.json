@@ -51,15 +51,13 @@
   "options": {
     "step": {
       "init": {
-        "title": "Motion bridge and Telegram delivery",
-        "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. This listener is Home Assistant-local and does not contact or wake the camera.",
+        "title": "Motion notification bridge",
+        "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Recording delivery is intentionally left to Home Assistant automations.",
         "data": {
-          "notification_entity": "Notification source entity",
-          "telegram_notify_entity": "Telegram destination"
+          "notification_entity": "Notification source entity"
         },
         "data_description": {
-          "notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge.",
-          "telegram_notify_entity": "Optional Telegram Bot notify entity. A verified MP4 is sent only after it is safely saved."
+          "notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge."
         }
       }
     }

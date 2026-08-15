@@ -21,7 +21,6 @@ CONF_DEVICE_PASSWORD = "device_password"
 CONF_INTERFACE = "interface"
 CONF_LOCAL_STATE = "local_state"
 CONF_NOTIFICATION_ENTITY = "notification_entity"
-CONF_TELEGRAM_NOTIFY_ENTITY = "telegram_notify_entity"
 
 AUTH_PATH_LEGACY = "legacy_local_credential"
 
