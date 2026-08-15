@@ -22,7 +22,7 @@ from .const import (
     CONF_UID,
     DOMAIN,
 )
-from .recording_download_probe_beta21 import (
+from .recording_download_beta22 import (
     apply_file_info_trace,
     apply_identity_trace,
     apply_stream_probe_trace,
@@ -158,7 +158,7 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Probe cmd13 prepare followed by handle-bound full-high cmd8."""
+    """Download and atomically save the verified full-high MP4."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -182,7 +182,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Find recording, run cmd13 then full-high cmd8, then close."""
+        """Find recording, download full-high MP4, verify, save, then close."""
         event = next(
             (
                 item
@@ -268,6 +268,7 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
                     self._entry.data[CONF_DEVICE_PASSWORD],
                     ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]),
                     self.hass.config.time_zone,
+                    output_dir=self.hass.config.path("reolink_battery", "recordings"),
                 )
         except CameraStageError as err:
             apply_stream_probe_trace(

@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
 from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
-from .recording_download_probe_beta21 import stream_probe_state
+from .recording_download_beta22 import stream_probe_state
 from .recording_probe import probe_state
 
 
@@ -227,6 +227,18 @@ async def async_get_config_entry_diagnostics(
                 "cmd8_forced_main_stream": stream.cmd8_forced_main_stream,
                 "cmd8_full_high_body_length": stream.cmd8_full_high_body_length,
                 "cmd8_layout": stream.cmd8_layout or None,
+                "file_write_attempted": stream.file_write_attempted,
+                "part_created": stream.part_created,
+                "file_bytes_written": stream.file_bytes_written,
+                "fsync_completed": stream.fsync_completed,
+                "mp4_ftyp_valid": stream.mp4_ftyp_valid,
+                "final_size": stream.final_size,
+                "final_size_match": stream.final_size_match,
+                "atomic_rename_completed": stream.atomic_rename_completed,
+                "file_saved": stream.file_saved,
+                "part_removed_on_failure": stream.part_removed_on_failure,
+                "sha256_present": stream.sha256_present,
+                "output_private_path": stream.output_private_path,
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -266,10 +278,10 @@ async def async_get_config_entry_diagnostics(
                 "raw_values_exposed": False,
             },
             "media_payload_observed": stream.media_frames > 0,
-            "full_media_download_attempted": False,
+            "full_media_download_attempted": stream.file_write_attempted,
             "cmd8_attempted": stream.cmd8_attempted,
         },
-        "milestone": "3B.2b-cmd13-prepare-cmd8-full-high-probe",
+        "milestone": "3B.2b-verified-atomic-mp4",
         "camera_worker_enabled": False,
         "automatic_recording_processing_enabled": False,
     }
