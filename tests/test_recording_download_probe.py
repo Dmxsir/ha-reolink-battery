@@ -19,6 +19,9 @@ probe = importlib.import_module(f"{PACKAGE}.recording_download_probe")
 
 
 class DownloadPrepareHelperTests(unittest.TestCase):
+    def test_download_header_reuses_validated_file_info_channel(self):
+        self.assertEqual(probe.DOWNLOAD_HEADER_CHANNEL_ID, 7)
+
     def test_download_xml_contains_required_identity(self):
         xml = probe._download_xml("ABC123", "/mnt/sda/a&b/test<1>.mp4")
         self.assertIn("<channelId>0</channelId>", xml)
@@ -53,6 +56,16 @@ class DownloadPrepareHelperTests(unittest.TestCase):
         self.assertFalse(handle)
         self.assertIsNone(size)
         self.assertFalse(name)
+
+    def test_prepare_error_keeps_only_safe_protocol_metadata(self):
+        err = probe.DownloadPrepareError(
+            "DOWNLOAD_PREPARE_ERROR",
+            failure_type="ApiError",
+            response_code=400,
+        )
+        self.assertEqual(err.stage, "DOWNLOAD_PREPARE_ERROR")
+        self.assertEqual(err.failure_type, "ApiError")
+        self.assertEqual(err.response_code, 400)
 
 
 if __name__ == "__main__":
