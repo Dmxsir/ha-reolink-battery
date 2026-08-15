@@ -53,6 +53,19 @@ class RecordingProbeState:
     failure_stage: str = ""
 
 
+_PROBE_STATES: dict[str, RecordingProbeState] = {}
+
+
+def probe_state(entry_id: str) -> RecordingProbeState:
+    """Return the non-secret runtime state for one config entry."""
+    return _PROBE_STATES.setdefault(entry_id, RecordingProbeState())
+
+
+def clear_probe_state(entry_id: str) -> None:
+    """Drop ephemeral probe telemetry on config-entry unload."""
+    _PROBE_STATES.pop(entry_id, None)
+
+
 def _interval_distance(target: datetime, start: datetime, end: datetime) -> float:
     if start <= target <= end:
         return 0.0
