@@ -13,6 +13,11 @@
 [![Stars](https://img.shields.io/github/stars/Dmxsir/ha-reolink-battery?style=for-the-badge&color=yellow&logo=github)](https://github.com/Dmxsir/ha-reolink-battery/stargazers)
 [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20the%20project-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/dmxsir)
 
+<a href="https://ko-fi.com/dmxsir">
+  <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/buymecoffe.png" alt="Buy me a coffee — support the project on Ko-fi" width="900">
+</a>
+
+
 **English** | [עברית](#hebrew)
 
 </div>
@@ -89,7 +94,7 @@ On the same Android phone:
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/Companion%20App.jpg" alt="Home Assistant Companion App - Last Notification sensor" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/Companion%20App.jpg" alt="Home Assistant Companion App - Last Notification sensor" width="560">
     </td>
   </tr>
 </table>
@@ -163,7 +168,7 @@ or wake the camera itself.
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png" alt="Reolink account sign-in" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png" alt="Reolink account sign-in" width="560">
     </td>
   </tr>
 </table>
@@ -176,7 +181,7 @@ then press **Submit**.
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png" alt="Select a Reolink battery camera" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png" alt="Select a Reolink battery camera" width="560">
     </td>
   </tr>
 </table>
@@ -193,7 +198,7 @@ select Tailscale, VPN, or other `/32` virtual interfaces.
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png" alt="Camera-local credentials and physical LAN interface" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png" alt="Camera-local credentials and physical LAN interface" width="560">
     </td>
   </tr>
 </table>
@@ -420,7 +425,7 @@ https://support.reolink.com/articles/360004189214-How-to-Enable-Push-Notificatio
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/Companion%20App.jpg" alt="חיישן Last Notification באפליקציית Home Assistant Companion" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/Companion%20App.jpg" alt="חיישן Last Notification באפליקציית Home Assistant Companion" width="560">
     </td>
   </tr>
 </table>
@@ -485,7 +490,7 @@ https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png" alt="התחברות לחשבון Reolink" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png" alt="התחברות לחשבון Reolink" width="560">
     </td>
   </tr>
 </table>
@@ -497,7 +502,7 @@ https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png" alt="בחירת מצלמת Reolink מבוססת סוללה" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png" alt="בחירת מצלמת Reolink מבוססת סוללה" width="560">
     </td>
   </tr>
 </table>
@@ -511,7 +516,7 @@ https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png" alt="פרטי התחברות מקומיים למצלמה וממשק LAN פיזי" width="560">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png" alt="פרטי התחברות מקומיים למצלמה וממשק LAN פיזי" width="560">
     </td>
   </tr>
 </table>
