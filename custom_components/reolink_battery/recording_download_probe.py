@@ -29,8 +29,10 @@ from .recording_probe import (
 from .transport import (
     BAICHUAN_MAGIC,
     FILE_DOWNLOAD_MESSAGE_CLASS,
+    UID_RESOLVE_TIMEOUT_SECONDS,
     BoundBaichuanUdpConnection,
     FileDownloadFrameMetadata,
+    UidResolveTrace,
     linux_ipv4_interface,
     resolve_uid_lan,
     validate_local_lan_route,
@@ -58,11 +60,13 @@ class DownloadPrepareError(CameraStageError):
         failure_type: str = "",
         response_code: int | None = None,
         file_info_trace: FileInfoTrace | None = None,
+        uid_resolve_trace: UidResolveTrace | None = None,
     ) -> None:
         super().__init__(stage)
         self.failure_type = failure_type
         self.response_code = response_code
         self.file_info_trace = file_info_trace
+        self.uid_resolve_trace = uid_resolve_trace
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +121,7 @@ class DownloadPrepareResult:
     response_accepted: bool
     file_info_trace: FileInfoTrace
     identity_trace: RecordingIdentityTrace
+    uid_resolve_trace: UidResolveTrace
 
 
 @dataclass(slots=True)
@@ -417,7 +422,7 @@ async def async_prepare_download_for_event(
     interface: ipaddress.IPv4Interface,
     time_zone: str,
     *,
-    resolve_timeout: float = 10.0,
+    resolve_timeout: float = UID_RESOLVE_TIMEOUT_SECONDS,
     command_timeout: int = 30,
 ) -> DownloadPrepareResult:
     """Find the event recording, send one metadata-enriched cmd13 probe, then close."""
@@ -426,12 +431,13 @@ async def async_prepare_download_for_event(
     connection = None
     failure_stage = "UID_RESOLVE_ERROR"
     file_info_trace = FileInfoTrace()
+    uid_resolve_trace = UidResolveTrace(timeout_seconds=float(resolve_timeout))
     try:
         interface_name, _ = await asyncio.to_thread(
             linux_ipv4_interface, str(interface.ip)
         )
         lease = await asyncio.to_thread(
-            resolve_uid_lan, uid, interface, resolve_timeout
+            resolve_uid_lan, uid, interface, resolve_timeout, uid_resolve_trace
         )
         await asyncio.to_thread(
             validate_local_lan_route, interface, lease.host, interface_name
@@ -527,8 +533,11 @@ async def async_prepare_download_for_event(
             in ACCEPTED_PREPARE_RESPONSE_CODES,
             file_info_trace=file_info_trace,
             identity_trace=identity_trace,
+            uid_resolve_trace=uid_resolve_trace,
         )
-    except CameraStageError:
+    except CameraStageError as err:
+        if isinstance(err, DownloadPrepareError) and err.uid_resolve_trace is None:
+            err.uid_resolve_trace = uid_resolve_trace
         raise
     except (ReolinkError, OSError, TimeoutError) as err:
         _LOGGER.warning("%s", failure_stage)
@@ -540,6 +549,7 @@ async def async_prepare_download_for_event(
             failure_type=type(err).__name__,
             response_code=rsp_code,
             file_info_trace=file_info_trace,
+            uid_resolve_trace=uid_resolve_trace,
         ) from None
     finally:
         try:

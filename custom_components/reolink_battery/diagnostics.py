@@ -437,9 +437,30 @@ async def async_get_config_entry_diagnostics(
             "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),
             "last_media_source_id": (worker.state.last_media_source_id or None) if worker else None,
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
+            "uid_resolve": {
+                "timeout_seconds": (
+                    worker.state.last_uid_resolve_timeout_seconds if worker else 0.0
+                ),
+                "resend_interval_seconds": (
+                    worker.state.last_uid_resolve_resend_interval_seconds if worker else 0.0
+                ),
+                "send_rounds": (
+                    worker.state.last_uid_resolve_send_rounds if worker else 0
+                ),
+                "datagrams_sent": (
+                    worker.state.last_uid_resolve_datagrams_sent if worker else 0
+                ),
+                "elapsed_ms": (
+                    worker.state.last_uid_resolve_elapsed_ms if worker else None
+                ),
+                "succeeded": bool(
+                    worker and worker.state.last_uid_resolve_succeeded
+                ),
+                "network_identifiers_exposed": False,
+            },
             "raw_path_exposed": False,
         },
-        "milestone": "3B.14-post-auth-fresh-heartbeat-tid",
+        "milestone": "3B.15-uid-wake-reliability",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

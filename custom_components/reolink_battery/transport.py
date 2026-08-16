@@ -31,6 +31,8 @@ BAICHUAN_MAGIC = bytes.fromhex("f0debc0a")
 FILE_DOWNLOAD_MESSAGE_CLASS = 0x6482
 FILE_DOWNLOAD_CLASS_WIRE = FILE_DOWNLOAD_MESSAGE_CLASS.to_bytes(2, "little")
 MODERN_24_CLASS_WIRE = (0x6414).to_bytes(2, "little")
+UID_RESOLVE_TIMEOUT_SECONDS = 15.0
+UID_RESOLVE_RESEND_SECONDS = 0.5
 
 
 def linux_ipv4_interface(source_ip: str) -> tuple[str, int]:
@@ -136,6 +138,18 @@ def _parse_reply(data: bytes, expected_client_id: int) -> int | None:
 
 
 @dataclass(slots=True)
+class UidResolveTrace:
+    """Secret-safe timing/cadence telemetry for one UID LAN wake attempt."""
+
+    timeout_seconds: float = UID_RESOLVE_TIMEOUT_SECONDS
+    resend_interval_seconds: float = UID_RESOLVE_RESEND_SECONDS
+    send_rounds: int = 0
+    datagrams_sent: int = 0
+    elapsed_ms: float | None = None
+    succeeded: bool = False
+
+
+@dataclass(slots=True)
 class UidLanLease:
     """UID discovery lease whose live socket can be handed to Baichuan."""
 
@@ -187,13 +201,22 @@ class FileDownloadFrameMetadata:
 def resolve_uid_lan(
     uid: str,
     interface: ipaddress.IPv4Interface,
-    timeout: float = 10.0,
+    timeout: float = UID_RESOLVE_TIMEOUT_SECONDS,
+    trace: UidResolveTrace | None = None,
 ) -> UidLanLease:
     """Resolve and wake one UID on the explicitly selected LAN."""
     if not uid.isalnum() or len(uid) > 127:
         raise ValueError("UID must contain 1-127 alphanumeric characters")
     if timeout <= 0:
         raise ValueError("timeout must be positive")
+    started_at = time.monotonic()
+    if trace is not None:
+        trace.timeout_seconds = float(timeout)
+        trace.resend_interval_seconds = UID_RESOLVE_RESEND_SECONDS
+        trace.send_rounds = 0
+        trace.datagrams_sent = 0
+        trace.elapsed_ms = None
+        trace.succeeded = False
     _, interface_index = linux_ipv4_interface(str(interface.ip))
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -225,13 +248,19 @@ def resolve_uid_lan(
             if now >= next_send:
                 for target in targets:
                     sock.sendto(packet, target)
-                next_send = now + 0.5
+                if trace is not None:
+                    trace.send_rounds += 1
+                    trace.datagrams_sent += len(targets)
+                next_send = now + UID_RESOLVE_RESEND_SECONDS
             try:
                 data, address = sock.recvfrom(65535)
             except TimeoutError:
                 continue
             device_id = _parse_reply(data, client_id)
             if device_id is not None:
+                if trace is not None:
+                    trace.elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 3)
+                    trace.succeeded = True
                 return UidLanLease(
                     address[0],
                     address[1],
@@ -243,8 +272,12 @@ def resolve_uid_lan(
                     sock,
                 )
     except BaseException:
+        if trace is not None and trace.elapsed_ms is None:
+            trace.elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 3)
         sock.close()
         raise
+    if trace is not None:
+        trace.elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 3)
     sock.close()
     raise TimeoutError(f"UID LAN resolution timed out after {timeout:.1f} seconds")
 

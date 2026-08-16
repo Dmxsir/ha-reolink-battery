@@ -64,6 +64,12 @@ class RecordingWorkerState:
     waiting_camera_closed: bool = False
     last_media_source_id: str = ""
     last_media_content_id_present: bool = False
+    last_uid_resolve_timeout_seconds: float = 0.0
+    last_uid_resolve_resend_interval_seconds: float = 0.0
+    last_uid_resolve_send_rounds: int = 0
+    last_uid_resolve_datagrams_sent: int = 0
+    last_uid_resolve_elapsed_ms: float | None = None
+    last_uid_resolve_succeeded: bool = False
 
 
 class RecordingWorker:
@@ -130,6 +136,27 @@ class RecordingWorker:
         age = (datetime.now(UTC) - event_time.astimezone(UTC)).total_seconds()
         return await self._wait_camera_closed(max(RECORDING_SETTLE_SECONDS - age, 0.0))
 
+    def _apply_uid_resolve_trace(self, trace) -> None:
+        """Copy only secret-safe UID wake timing/cadence telemetry."""
+        if trace is None:
+            return
+        self.state.last_uid_resolve_timeout_seconds = float(
+            getattr(trace, "timeout_seconds", 0.0) or 0.0
+        )
+        self.state.last_uid_resolve_resend_interval_seconds = float(
+            getattr(trace, "resend_interval_seconds", 0.0) or 0.0
+        )
+        self.state.last_uid_resolve_send_rounds = int(
+            getattr(trace, "send_rounds", 0) or 0
+        )
+        self.state.last_uid_resolve_datagrams_sent = int(
+            getattr(trace, "datagrams_sent", 0) or 0
+        )
+        self.state.last_uid_resolve_elapsed_ms = getattr(trace, "elapsed_ms", None)
+        self.state.last_uid_resolve_succeeded = bool(
+            getattr(trace, "succeeded", False)
+        )
+
     async def _process_once(self, event: CloudEvent) -> bool:
         """Run one closed-on-entry session and commit only a verified MP4."""
         # Keep protocol-heavy imports lazy: normal HA startup never contacts the
@@ -149,6 +176,12 @@ class RecordingWorker:
         self.state.last_file_saved = False
         self.state.last_file_size = 0
         self.state.last_ready_event_fired = False
+        self.state.last_uid_resolve_timeout_seconds = 0.0
+        self.state.last_uid_resolve_resend_interval_seconds = 0.0
+        self.state.last_uid_resolve_send_rounds = 0
+        self.state.last_uid_resolve_datagrams_sent = 0
+        self.state.last_uid_resolve_elapsed_ms = None
+        self.state.last_uid_resolve_succeeded = False
 
         # Do not let a previous partial cmd8 attempt leak into diagnostics for a
         # later failure that occurs before cmd13/cmd8 (for example cmd14 open).
@@ -181,6 +214,7 @@ class RecordingWorker:
                     telemetry_event_time=event_time,
                 )
         except CameraStageError as err:
+            self._apply_uid_resolve_trace(getattr(err, "uid_resolve_trace", None))
             apply_stream_probe_trace(
                 self._entry.entry_id, getattr(err, "stream_trace", None)
             )
@@ -196,6 +230,7 @@ class RecordingWorker:
             self.state.last_failure_type = type(err).__name__
             return False
 
+        self._apply_uid_resolve_trace(getattr(result, "uid_resolve_trace", None))
         trace = result.stream_trace
         apply_stream_probe_trace(self._entry.entry_id, trace)
         if not getattr(trace, "file_saved", False):

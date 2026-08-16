@@ -46,10 +46,8 @@ class Beta40PostAuthFreshHeartbeatTests(unittest.TestCase):
         for token in (
             "p2p_heartbeat_fresh_tid_activated_after_login",
             "p2p_heartbeat_pre_auth_reused_tid_count",
-            "3B.14-post-auth-fresh-heartbeat-tid",
         ):
             self.assertIn(token, diagnostics)
-        self.assertIn('"version": "0.1.2-beta.40"', MANIFEST.read_text())
 
 
 if __name__ == "__main__":
