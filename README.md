@@ -8,41 +8,99 @@ The primary tested device is the **Reolink Argus 2E**. The intended workflow is:
 
 ```text
 Motion event
--> Reolink cloud notification
--> wake camera
+-> Reolink Android push notification
+-> Home Assistant Companion Last Notification sensor
+-> persistent event queue
+-> battery-safe camera wake
 -> locate the matching SD recording
--> download MP4
--> Home Assistant
--> Telegram
+-> verified MP4 download
+-> Home Assistant event
+-> optional automation (for example Telegram)
 ```
 
 ## Development status
 
-Version **0.1.0** is the first stable release of the currently implemented
-feature set.
+The current tested baseline is **v0.1.2-beta.45**. It is being kept unchanged
+for a soak-test period before promotion to the next stable release.
 
-Milestone 3A is complete: the integration loads, provides an account/device
-config flow, validates a short battery-safe local camera session, polls the
-cloud Message Center, decodes its STM v1 response, deduplicates normalized
-events, and persists them in a bounded pending queue.
+The automatic recording worker is operational: a matching Android Reolink push
+notification is queued, the worker waits for the camera recording to settle,
+opens a short local Baichuan session, downloads the matching SD-card recording,
+verifies the MP4 on disk, and then fires the
+`reolink_battery_recording_ready` Home Assistant event.
 
-The integration provides cache-backed entities for battery percentage,
-charging, storage total/used/free, Wi-Fi signal, and the last local refresh
-timestamp. Storage is retained internally as bytes and presented as decimal GB
-with two suggested decimal places. Model, firmware, and hardware are shown on
-the Home Assistant device.
+The integration remains battery-oriented. It does not maintain a permanent
+camera connection and does not use RTSP, ONVIF, preview polling, or continuous
+streaming.
 
-The **Refresh device status** button performs one explicit short local session:
-UID resolution, wake, LAN transport, local authentication, status queries, and
-immediate disconnect. It updates all local entities without polling. Loading or
-reloading Home Assistant does not wake the camera, and no periodic local refresh
-is scheduled. Until a local snapshot has been captured, local entities remain
-unavailable.
+## Required
 
-Automatic motion-to-recording download and Telegram delivery are still under
-development. The pending queue currently has no camera worker, so a cloud event
-cannot wake the camera or download a recording. Message Center polling remains
-cloud-only and does not use the separately stored camera-local password.
+- **Home Assistant 2026.8.1 or newer**.
+- A supported Reolink battery camera with recording enabled on its SD card.
+- The camera's **local administrator credentials**. On legacy Argus cameras the
+  username is normally `admin`; the local device password is separate from the
+  Reolink account password.
+- A physical IPv4 LAN interface on the Home Assistant host that can reach the
+  camera directly. Do not select Tailscale, VPN, or other `/32` virtual
+  interfaces.
+- For automatic motion-to-recording processing, an **Android phone** running
+  both the official **Reolink App** and the official **Home Assistant Companion
+  App**. The current notification bridge is Android-specific.
+
+### Reolink App notification setup
+
+The integration uses the Reolink push notification received by the Android
+phone as the motion trigger. On the phone:
+
+1. Allow Android notifications for the **Reolink App**.
+2. In the Reolink App, open the camera settings and enable **Push Notifications**.
+3. Configure the notification schedule/detection types so the desired motion
+   events generate a push notification.
+4. Use Reolink's notification test, or trigger a real motion event, and confirm
+   that the phone receives the camera notification.
+
+Official Reolink instructions:
+https://support.reolink.com/articles/360004189214-How-to-Enable-Push-Notifications-on-iOS-and-Android-Phones/
+
+### Home Assistant Companion App notification sensor
+
+On the same Android phone:
+
+1. Open **Home Assistant App -> Settings -> Companion App -> Manage Sensors**.
+2. Find and enable **Last Notification**.
+3. Grant Home Assistant the requested **notification access** permission.
+4. Open the Last Notification sensor settings and configure its **Allow List**
+   to include the Reolink App (`com.mcu.reolink`). Using an allow list is
+   recommended instead of disabling the allow-list requirement.
+5. Trigger one Reolink notification after enabling the sensor. A notification
+   sensor using an allow list may not appear as a Home Assistant entity until an
+   allowed application posts a notification.
+6. In Home Assistant go to **Settings -> Devices & services -> Reolink Battery -> Configure**
+   and select that phone's **Last Notification** sensor.
+
+Home Assistant Companion sensor documentation:
+https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
+
+## Manual Installation
+
+1. Download the desired release archive from the GitHub **Releases** page.
+2. Extract the archive.
+3. Copy the folder:
+
+   ```text
+   custom_components/reolink_battery
+   ```
+
+   into your Home Assistant configuration directory so the final path is:
+
+   ```text
+   /config/custom_components/reolink_battery
+   ```
+
+4. If `/config/custom_components` does not exist, create it first.
+5. Restart Home Assistant.
+6. Go to **Settings -> Devices & services -> Add integration**.
+7. Search for **Reolink Battery** and complete the setup flow below.
 
 ## HACS installation
 
@@ -57,8 +115,6 @@ cloud-only and does not use the separately stored camera-local password.
 6. Restart Home Assistant.
 7. Go to **Settings -> Devices & services -> Add integration**.
 8. Search for **Reolink Battery**.
-
-Home Assistant 2026.8.1 or newer is required for this release.
 
 ## Configuration
 
@@ -98,6 +154,16 @@ select Tailscale, VPN, or other `/32` virtual interfaces.
 
 ![Camera-local credentials and physical LAN interface](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png)
 
+#### 4. Select the Companion App notification sensor
+
+After the integration has been added, open:
+
+**Settings -> Devices & services -> Reolink Battery -> Configure**
+
+Select the Android phone's **Last Notification** sensor that you prepared in the
+Required section. The worker will listen to that entity without polling the
+phone or the camera.
+
 The integration selects a physical private IPv4 LAN and rejects `/32`
 VPN/Tailscale adapters. Setup validation resolves and wakes the selected camera,
 authenticates, and disconnects immediately.
@@ -105,6 +171,91 @@ authenticates, and disconnects immediately.
 It does not enable or use RTSP, ONVIF, HTTP fallback, preview, live view,
 snapshot polling, or a permanent camera connection. Cloud event polling does
 not contact or wake the camera.
+
+## Automation Examples
+
+After a recording has been completely downloaded and verified, the integration
+fires:
+
+```text
+reolink_battery_recording_ready
+```
+
+Useful event data includes `device_name`, `alarm_time`, `file_path`,
+`media_content_id`, and `file_size`.
+
+### Send the recording to Telegram
+
+Replace the Telegram notify entity with your own entity.
+
+```yaml
+alias: Reolink - Send motion recording to Telegram
+triggers:
+  - trigger: event
+    event_type: reolink_battery_recording_ready
+conditions: []
+actions:
+  - action: telegram_bot.send_video
+    data:
+      entity_id:
+        - notify.YOUR_TELEGRAM_BOT_ENTITY
+      file: "{{ trigger.event.data.file_path }}"
+      caption: "🎥 Motion detected on {{ trigger.event.data.device_name }}"
+mode: queued
+max: 10
+```
+
+### Send to Telegram and delete the local copy afterwards
+
+If Telegram is your long-term storage and you do not want downloaded recordings
+to accumulate on the Home Assistant server, add this `shell_command` to
+`configuration.yaml`:
+
+```yaml
+shell_command:
+  delete_reolink_recording: 'rm -f -- "{{ file_path }}"'
+```
+
+Then use an automation such as:
+
+```yaml
+alias: Reolink - Send recording to Telegram and clean up
+triggers:
+  - trigger: event
+    event_type: reolink_battery_recording_ready
+conditions: []
+actions:
+  - variables:
+      video_file: "{{ trigger.event.data.file_path }}"
+
+  - action: telegram_bot.send_video
+    data:
+      entity_id:
+        - notify.YOUR_TELEGRAM_BOT_ENTITY
+      file: "{{ video_file }}"
+      caption: "🎥 Motion detected on {{ trigger.event.data.device_name }}"
+
+  - delay:
+      seconds: 5
+
+  - condition: template
+    value_template: >
+      {{ video_file is string
+         and video_file.startswith('/media/reolink_battery/')
+         and video_file.endswith('.mp4') }}
+
+  - action: shell_command.delete_reolink_recording
+    data:
+      file_path: "{{ video_file }}"
+
+mode: queued
+max: 10
+```
+
+The path check intentionally limits deletion to MP4 files inside the default
+`/media/reolink_battery/` directory. If you use a custom Home Assistant media
+directory, adjust the prefix accordingly. Reload **Shell Commands** or restart
+Home Assistant after adding the `shell_command`.
 
 ## Privacy and security
 
