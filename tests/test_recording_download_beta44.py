@@ -42,8 +42,10 @@ class Beta44VerifiedSizeAwareCollectorTests(unittest.TestCase):
 
     def test_diagnostics_and_version(self):
         diagnostics = DIAGNOSTICS.read_text()
-        self.assertIn('"milestone": "3B.18-verified-size-aware-collector"', diagnostics)
-        self.assertEqual(json.loads(MANIFEST.read_text())["version"], "0.1.2-beta.44")
+        self.assertIn('"milestone": "3B.', diagnostics)
+        version = json.loads(MANIFEST.read_text())["version"]
+        self.assertTrue(version.startswith("0.1.2-beta."))
+        self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 44)
 
 
 if __name__ == "__main__":

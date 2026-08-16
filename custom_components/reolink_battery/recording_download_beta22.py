@@ -235,8 +235,32 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
         self._persisted_mp4_bytes += len(data)
         trace.file_bytes_written = self._persisted_mp4_bytes
 
+    def _apply_reported_size_collector_limits(self) -> None:
+        """Resize verified collection from cmd13's authoritative file size.
+
+        Some Argus FileInfo pages omit a directly parseable size, leaving
+        candidate.size at zero. The accepted cmd13 response carries the actual
+        recording size and is observed before cmd8 starts, so use that value to
+        enlarge only the verified-file collector while retaining the hard cap.
+        """
+        expected = int(self._stream_trace.xml_reported_size or 0)
+        if expected <= 0:
+            return
+        collector_bytes, collector_frames = _verified_collector_limits(expected)
+        self._stream_trace.sample_limit_bytes = max(
+            self._stream_trace.sample_limit_bytes, collector_bytes
+        )
+        self._stream_trace.aggregate_limit_bytes = max(
+            self._stream_trace.aggregate_limit_bytes, collector_bytes
+        )
+        self._stream_trace.sample_limit_frames = max(
+            self._stream_trace.sample_limit_frames, collector_frames
+        )
+
     def _observe_frame(self, frame: beta17._RawDownloadFrame) -> None:
         super()._observe_frame(frame)
+        if frame.cmd_id == 13 and frame.response_code in (0, 200):
+            self._apply_reported_size_collector_limits()
         if frame.cmd_id == 8 and frame.response_code in (0, 200):
             self._persist_new_mp4_bytes()
 

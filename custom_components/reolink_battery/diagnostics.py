@@ -510,7 +510,7 @@ async def async_get_config_entry_diagnostics(
             },
             "raw_path_exposed": False,
         },
-        "milestone": "3B.18-verified-size-aware-collector",
+        "milestone": "3B.19-cmd13-reported-size-collector",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }
