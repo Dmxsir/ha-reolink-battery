@@ -53,6 +53,20 @@ class RecordingWorkerState:
     completed: int = 0
     deferred_count: int = 0
     deferred_rearmed_count: int = 0
+    retry_preemptions: int = 0
+    last_preempted_event_time: datetime | None = None
+    last_preempting_event_time: datetime | None = None
+    prior_attempt_event_time: datetime | None = None
+    prior_attempt_time: datetime | None = None
+    prior_failure_stage: str = ""
+    prior_failure_type: str = ""
+    prior_uid_resolve_succeeded: bool = False
+    prior_uid_resolve_elapsed_ms: float | None = None
+    prior_stream_termination_reason: str = ""
+    prior_stream_elapsed_seconds: float | None = None
+    prior_stream_file_bytes: int = 0
+    prior_stream_expected_size: int | None = None
+    prior_stream_remote_disconnect: bool = False
     last_event_time: datetime | None = None
     last_attempt_time: datetime | None = None
     last_completed_time: datetime | None = None
@@ -131,6 +145,66 @@ class RecordingWorker:
             event.notification_post_time or event.alarm_time
         )
 
+    @staticmethod
+    def _event_time(event: CloudEvent) -> datetime:
+        return event.notification_post_time or event.alarm_time
+
+    def _newer_pending_event(self, event: CloudEvent) -> CloudEvent | None:
+        """Return a newer non-deferred Android event, if one is queued."""
+        newest = self._next_android_event()
+        if newest is None or newest.event_id == event.event_id:
+            return None
+        if self._event_time(newest) <= self._event_time(event):
+            return None
+        return newest
+
+    def _record_retry_preemption(
+        self, event: CloudEvent, newer: CloudEvent
+    ) -> None:
+        self.state.retry_preemptions += 1
+        self.state.last_preempted_event_time = self._event_time(event)
+        self.state.last_preempting_event_time = self._event_time(newer)
+
+    async def _wait_retry_or_newer_event(
+        self, event: CloudEvent, seconds: float
+    ) -> bool:
+        """Wait for retry delay, but yield immediately to a newer motion.
+
+        Returns True only when the full retry delay elapsed. A False result means
+        shutdown or a newer queued motion should take priority. No camera session
+        is opened by this wait.
+        """
+        newer = self._newer_pending_event(event)
+        if newer is not None:
+            self._record_retry_preemption(event, newer)
+            return False
+        if seconds <= 0:
+            return not self._stopped.is_set()
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + seconds
+        self.state.waiting_camera_closed = True
+        try:
+            while not self._stopped.is_set():
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return True
+                try:
+                    await asyncio.wait_for(self._trigger.wait(), timeout=remaining)
+                except TimeoutError:
+                    return True
+                if self._stopped.is_set():
+                    return False
+                self._trigger.clear()
+                self.state.pending_trigger = False
+                newer = self._newer_pending_event(event)
+                if newer is not None:
+                    self._record_retry_preemption(event, newer)
+                    return False
+            return False
+        finally:
+            self.state.waiting_camera_closed = False
+
     async def _wait_camera_closed(self, seconds: float) -> bool:
         """Wait without opening any camera transport. Return False if stopping."""
         if seconds <= 0:
@@ -179,7 +253,36 @@ class RecordingWorker:
             apply_stream_probe_trace,
             async_prepare_download_for_event,
             reset_stream_probe_state,
+            stream_probe_state,
         )
+
+        if self.state.last_attempt_time is not None:
+            prior_trace = stream_probe_state(self._entry.entry_id)
+            self.state.prior_attempt_event_time = self.state.last_event_time
+            self.state.prior_attempt_time = self.state.last_attempt_time
+            self.state.prior_failure_stage = self.state.last_failure_stage
+            self.state.prior_failure_type = self.state.last_failure_type
+            self.state.prior_uid_resolve_succeeded = (
+                self.state.last_uid_resolve_succeeded
+            )
+            self.state.prior_uid_resolve_elapsed_ms = (
+                self.state.last_uid_resolve_elapsed_ms
+            )
+            self.state.prior_stream_termination_reason = str(
+                getattr(prior_trace, "termination_reason", "") or ""
+            )
+            self.state.prior_stream_elapsed_seconds = getattr(
+                prior_trace, "elapsed_seconds", None
+            )
+            self.state.prior_stream_file_bytes = int(
+                getattr(prior_trace, "file_bytes_written", 0) or 0
+            )
+            self.state.prior_stream_expected_size = getattr(
+                prior_trace, "xml_reported_size", None
+            )
+            self.state.prior_stream_remote_disconnect = bool(
+                getattr(prior_trace, "remote_disconnect_observed", False)
+            )
 
         self.state.attempts += 1
         self.state.last_attempt_time = datetime.now(UTC)
@@ -303,21 +406,25 @@ class RecordingWorker:
                 return
 
             completed = False
+            preempted = False
             for attempt in range(MAX_ATTEMPTS_PER_TRIGGER):
                 if self._stopped.is_set():
                     return
                 if attempt:
-                    self.state.retries += 1
                     delay = RETRY_DELAYS_SECONDS[
                         min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)
                     ]
-                    if not await self._wait_camera_closed(delay):
-                        return
+                    if not await self._wait_retry_or_newer_event(event, delay):
+                        if self._stopped.is_set():
+                            return
+                        preempted = True
+                        break
+                    self.state.retries += 1
                 if await self._process_once(event):
                     completed = True
                     break
 
-            if not completed:
+            if not completed and not preempted:
                 # Keep the failed event pending, but defer it for this runtime so
                 # it cannot head-of-line block a newer motion event. A config-entry
                 # reload or HA restart clears the in-memory deferral and retries it.

@@ -422,8 +422,18 @@ async def async_get_config_entry_diagnostics(
             "deferred_rearmed_count": (
                 worker.state.deferred_rearmed_count if worker else 0
             ),
+            "retry_preemptions": worker.state.retry_preemptions if worker else 0,
+            "last_preempted_event_time": (
+                worker.state.last_preempted_event_time.isoformat()
+                if worker and worker.state.last_preempted_event_time else None
+            ),
+            "last_preempting_event_time": (
+                worker.state.last_preempting_event_time.isoformat()
+                if worker and worker.state.last_preempting_event_time else None
+            ),
             "selection_policy": "newest_pending_first",
             "deferred_rearm_policy": "new_notification",
+            "retry_preemption_policy": "newer_notification_before_retry",
             "last_event_time": (
                 worker.state.last_event_time.isoformat()
                 if worker and worker.state.last_event_time else None
@@ -438,6 +448,40 @@ async def async_get_config_entry_diagnostics(
             ),
             "last_failure_stage": (worker.state.last_failure_stage or None) if worker else None,
             "last_failure_type": (worker.state.last_failure_type or None) if worker else None,
+            "prior_attempt": {
+                "event_time": (
+                    worker.state.prior_attempt_event_time.isoformat()
+                    if worker and worker.state.prior_attempt_event_time else None
+                ),
+                "attempt_time": (
+                    worker.state.prior_attempt_time.isoformat()
+                    if worker and worker.state.prior_attempt_time else None
+                ),
+                "failure_stage": (worker.state.prior_failure_stage or None) if worker else None,
+                "failure_type": (worker.state.prior_failure_type or None) if worker else None,
+                "uid_resolve_succeeded": bool(
+                    worker and worker.state.prior_uid_resolve_succeeded
+                ),
+                "uid_resolve_elapsed_ms": (
+                    worker.state.prior_uid_resolve_elapsed_ms if worker else None
+                ),
+                "stream_termination_reason": (
+                    worker.state.prior_stream_termination_reason or None
+                    if worker else None
+                ),
+                "stream_elapsed_seconds": (
+                    worker.state.prior_stream_elapsed_seconds if worker else None
+                ),
+                "stream_file_bytes": (
+                    worker.state.prior_stream_file_bytes if worker else 0
+                ),
+                "stream_expected_size": (
+                    worker.state.prior_stream_expected_size if worker else None
+                ),
+                "stream_remote_disconnect": bool(
+                    worker and worker.state.prior_stream_remote_disconnect
+                ),
+            },
             "last_file_saved": bool(worker and worker.state.last_file_saved),
             "last_file_size": worker.state.last_file_size if worker else 0,
             "last_ready_event_fired": bool(worker and worker.state.last_ready_event_fired),
@@ -466,7 +510,7 @@ async def async_get_config_entry_diagnostics(
             },
             "raw_path_exposed": False,
         },
-        "milestone": "3B.16-fresh-first-queue-rearm",
+        "milestone": "3B.17-fresh-retry-preemption",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }
