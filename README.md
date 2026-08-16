@@ -68,6 +68,9 @@ On the same Android phone:
 
 1. Open **Home Assistant App -> Settings -> Companion App -> Manage Sensors**.
 2. Find and enable **Last Notification**.
+
+![Home Assistant Companion App - Last Notification sensor](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/Companion%20App.jpg)
+
 3. Grant Home Assistant the requested **notification access** permission.
 4. Open the Last Notification sensor settings and configure its **Allow List**
    to include the Reolink App (`com.mcu.reolink`). Using an allow list is
