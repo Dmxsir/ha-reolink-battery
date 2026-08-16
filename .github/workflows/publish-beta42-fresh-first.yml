@@ -1,0 +1,148 @@
+name: Publish beta.42 fresh-first queue
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/publish-beta42-fresh-first.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Patch beta.42 source
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          worker_path = root / 'custom_components/reolink_battery/recording_worker.py'
+          diagnostics_path = root / 'custom_components/reolink_battery/diagnostics.py'
+          manifest_path = root / 'custom_components/reolink_battery/manifest.json'
+          beta41_test_path = root / 'tests/test_recording_download_beta41.py'
+          beta42_test_path = root / 'tests/test_recording_worker_beta42.py'
+
+          worker = worker_path.read_text()
+
+          old_state = '''    completed: int = 0\n    deferred_count: int = 0\n    last_event_time: datetime | None = None\n'''
+          new_state = '''    completed: int = 0\n    deferred_count: int = 0\n    deferred_rearmed_count: int = 0\n    last_event_time: datetime | None = None\n'''
+          if old_state not in worker:
+              raise SystemExit('worker state anchor not found')
+          worker = worker.replace(old_state, new_state, 1)
+
+          old_notify = '''    def notify(self) -> None:\n        \"\"\"Signal that the persistent queue may contain work.\"\"\"\n        self.state.pending_trigger = True\n        self._trigger.set()\n'''
+          new_notify = '''    def notify(self) -> None:\n        \"\"\"Signal new work and re-arm deferred backlog for the fresh wake window.\"\"\"\n        if self._deferred_event_ids:\n            self._deferred_event_ids.clear()\n            self.state.deferred_count = 0\n            self.state.deferred_rearmed_count += 1\n        self.state.pending_trigger = True\n        self._trigger.set()\n'''
+          if old_notify not in worker:
+              raise SystemExit('worker notify anchor not found')
+          worker = worker.replace(old_notify, new_notify, 1)
+
+          old_picker = '''    def _oldest_android_event(self) -> CloudEvent | None:\n        \"\"\"Return oldest Android event not deferred in this runtime.\"\"\"\n        return next(\n            (\n                event\n                for event in self._entry.runtime_data.coordinator.pending_events\n                if event.source == \"android_notification\"\n                and event.event_id not in self._deferred_event_ids\n            ),\n            None,\n        )\n'''
+          new_picker = '''    def _next_android_event(self) -> CloudEvent | None:\n        \"\"\"Return newest Android event not deferred in this runtime.\n\n        A fresh motion notification must not wait behind stale backlog: the camera\n        is naturally awake around the fresh event, so newest-first maximizes the\n        chance of completing that recording before deep sleep. Older pending\n        events remain persistent and are processed afterwards.\n        \"\"\"\n        candidates = (\n            event\n            for event in self._entry.runtime_data.coordinator.pending_events\n            if event.source == \"android_notification\"\n            and event.event_id not in self._deferred_event_ids\n        )\n        return max(\n            candidates,\n            key=lambda event: event.notification_post_time or event.alarm_time,\n            default=None,\n        )\n'''
+          if old_picker not in worker:
+              raise SystemExit('worker picker anchor not found')
+          worker = worker.replace(old_picker, new_picker, 1)
+          worker = worker.replace('self._oldest_android_event()', 'self._next_android_event()')
+          worker = worker.replace(
+              '# Continue to the next non-deferred pending event in the same trigger.\n            # This preserves one serialized camera worker and never opens sessions\n            # during settle/retry waits.',
+              '# Continue newest-first through non-deferred pending events. Fresh\n            # motion gets the natural wake window; stale backlog follows without\n            # adding polling or concurrent camera sessions.',
+          )
+          worker_path.write_text(worker)
+
+          diagnostics = diagnostics_path.read_text()
+          old_diag = '''            \"completed\": worker.state.completed if worker else 0,\n            \"last_event_time\": (\n'''
+          new_diag = '''            \"completed\": worker.state.completed if worker else 0,\n            \"deferred_count\": worker.state.deferred_count if worker else 0,\n            \"deferred_rearmed_count\": (\n                worker.state.deferred_rearmed_count if worker else 0\n            ),\n            \"selection_policy\": \"newest_pending_first\",\n            \"deferred_rearm_policy\": \"new_notification\",\n            \"last_event_time\": (\n'''
+          if old_diag not in diagnostics:
+              raise SystemExit('diagnostics worker anchor not found')
+          diagnostics = diagnostics.replace(old_diag, new_diag, 1)
+          diagnostics = diagnostics.replace(
+              '"milestone": "3B.15-uid-wake-reliability"',
+              '"milestone": "3B.16-fresh-first-queue-rearm"',
+              1,
+          )
+          diagnostics_path.write_text(diagnostics)
+
+          manifest = manifest_path.read_text()
+          if '"version": "0.1.2-beta.41"' not in manifest:
+              raise SystemExit('manifest beta41 anchor not found')
+          manifest_path.write_text(manifest.replace(
+              '"version": "0.1.2-beta.41"',
+              '"version": "0.1.2-beta.42"',
+              1,
+          ))
+
+          beta41 = beta41_test_path.read_text()
+          beta41 = beta41.replace('import unittest\n', 'import unittest\nimport json\n', 1)
+          old_assert = '''        self.assertIn('\"version\": \"0.1.2-beta.41\"', MANIFEST.read_text())\n'''
+          new_assert = '''        version = json.loads(MANIFEST.read_text())[\"version\"]\n        self.assertTrue(version.startswith(\"0.1.2-beta.\"))\n        self.assertGreaterEqual(int(version.rsplit(\".\", 1)[1]), 41)\n'''
+          if old_assert not in beta41:
+              raise SystemExit('beta41 version assertion anchor not found')
+          beta41_test_path.write_text(beta41.replace(old_assert, new_assert, 1))
+
+          beta42_test_path.write_text('''\"\"\"Regression guards for beta.42 fresh-first queue scheduling.\"\"\"\n\nfrom pathlib import Path\nimport json\nimport unittest\n\nROOT = Path(__file__).parents[1]\nWORKER = ROOT / \"custom_components\" / \"reolink_battery\" / \"recording_worker.py\"\nTRANSPORT = ROOT / \"custom_components\" / \"reolink_battery\" / \"transport.py\"\nBETA20 = ROOT / \"custom_components\" / \"reolink_battery\" / \"recording_download_probe_beta20.py\"\nDIAGNOSTICS = ROOT / \"custom_components\" / \"reolink_battery\" / \"diagnostics.py\"\nMANIFEST = ROOT / \"custom_components\" / \"reolink_battery\" / \"manifest.json\"\n\n\nclass Beta42FreshFirstQueueTests(unittest.TestCase):\n    def test_newest_pending_event_is_selected_first(self):\n        source = WORKER.read_text()\n        self.assertIn(\"def _next_android_event\", source)\n        self.assertIn(\"return max(\", source)\n        self.assertIn(\"event.notification_post_time or event.alarm_time\", source)\n        self.assertNotIn(\"def _oldest_android_event\", source)\n\n    def test_new_notification_rearms_deferred_backlog(self):\n        source = WORKER.read_text()\n        notify = source[source.index(\"    def notify\"):source.index(\"    async def async_shutdown\")]\n        self.assertIn(\"self._deferred_event_ids.clear()\", notify)\n        self.assertIn(\"self.state.deferred_count = 0\", notify)\n        self.assertIn(\"self.state.deferred_rearmed_count += 1\", notify)\n\n    def test_wake_and_download_protocol_contracts_are_unchanged(self):\n        transport = TRANSPORT.read_text()\n        beta20 = BETA20.read_text()\n        self.assertIn(\"UID_RESOLVE_TIMEOUT_SECONDS = 15.0\", transport)\n        self.assertIn(\"UID_RESOLVE_RESEND_SECONDS = 0.5\", transport)\n        self.assertNotIn(\"p2p.reolink.com\", transport)\n        self.assertIn(\"PERIODIC_RX_ACK_INTERVAL = 0.010\", beta20)\n        self.assertIn(\"P2P_HEARTBEAT_INTERVAL = 1.0\", beta20)\n        self.assertIn(\"activate_fresh_heartbeat_tids_after_login\", beta20)\n\n    def test_diagnostics_and_version(self):\n        diagnostics = DIAGNOSTICS.read_text()\n        self.assertIn('\"selection_policy\": \"newest_pending_first\"', diagnostics)\n        self.assertIn('\"deferred_rearm_policy\": \"new_notification\"', diagnostics)\n        self.assertIn('\"milestone\": \"3B.16-fresh-first-queue-rearm\"', diagnostics)\n        self.assertEqual(json.loads(MANIFEST.read_text())[\"version\"], \"0.1.2-beta.42\")\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n''')
+          PY
+
+      - name: Verify beta.42 regressions
+        run: |
+          python -m compileall -q custom_components/reolink_battery
+          python -m unittest tests.test_recording_download_beta40 tests.test_recording_download_beta41 tests.test_recording_worker_beta42
+
+      - name: Commit beta.42 source
+        id: commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/recording_worker.py \
+                  custom_components/reolink_battery/diagnostics.py \
+                  custom_components/reolink_battery/manifest.json \
+                  tests/test_recording_download_beta41.py \
+                  tests/test_recording_worker_beta42.py
+          git commit -m "Release beta42 fresh-first queue scheduling"
+          git push origin HEAD:feature/recording-worker-3b2
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish beta.42 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          git tag -f v0.1.2-beta.42 "$SOURCE_SHA"
+          git push origin -f v0.1.2-beta.42
+          gh release create v0.1.2-beta.42 \
+            --repo Dmxsir/ha-reolink-battery \
+            --target "$SOURCE_SHA" \
+            --title "v0.1.2-beta.42" \
+            --prerelease \
+            --notes "Milestone 3B.16 changes only worker scheduling. Fresh Android motion events are selected newest-first so a live wake window is not consumed by stale backlog. A new notification also re-arms previously deferred pending events; after the fresh recording is handled, older persistent events can retry while the battery camera is naturally awake. Beta.41 15-second LAN wake discovery, beta.40 post-auth fresh heartbeat IDs, 10 ms periodic-only inclusive-highest ACK, cmd13/cmd8 transport, MP4 verification and Telegram handoff are unchanged. No cloud P2P/relay video path was added."
+
+      - name: Remove temporary beta.42 workflow
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin feature/recording-worker-3b2
+          git checkout -B feature/recording-worker-3b2 origin/feature/recording-worker-3b2
+          rm -f .github/workflows/publish-beta42-fresh-first.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Remove temporary beta42 publish workflow"
+            git push origin HEAD:feature/recording-worker-3b2
+          fi
