@@ -1,0 +1,87 @@
+name: Organize README images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/organize-images.yml
+
+permissions:
+  contents: write
+
+jobs:
+  organize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Move images and update README
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          images = [
+              'Companion App.jpg',
+              'buymecoffe.png',
+              'צילום מסך_2026-08-16_19-37-42.png',
+              'צילום מסך_2026-08-16_19-40-18.png',
+              'צילום מסך_2026-08-16_19-40-40.png',
+          ]
+
+          replacements = {
+              '/main/Companion%20App.jpg': '/main/IMAGE/Companion%20App.jpg',
+              '/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png': '/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png',
+              '/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png': '/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png',
+              '/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png': '/main/IMAGE/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png',
+          }
+
+          banner = '''\n<a href="https://ko-fi.com/dmxsir">\n  <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/buymecoffe.png" alt="Buy me a coffee — support the project on Ko-fi" width="900">\n</a>\n'''
+
+          def run(*args, check=True):
+              return subprocess.run(args, check=check)
+
+          def apply(branch):
+              run('git', 'checkout', branch)
+              run('git', 'pull', '--ff-only', 'origin', branch)
+              Path('IMAGE').mkdir(exist_ok=True)
+
+              moved = False
+              for name in images:
+                  src = Path(name)
+                  dst = Path('IMAGE') / name
+                  if src.exists() and not dst.exists():
+                      run('git', 'mv', str(src), str(dst))
+                      moved = True
+
+              keep = Path('IMAGE/.gitkeep')
+              if keep.exists():
+                  run('git', 'rm', str(keep))
+
+              readme = Path('README.md')
+              text = readme.read_text(encoding='utf-8')
+              for old, new in replacements.items():
+                  text = text.replace(old, new)
+
+              if 'IMAGE/buymecoffe.png' not in text:
+                  marker = '[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20the%20project-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/dmxsir)'
+                  if marker in text:
+                      text = text.replace(marker, marker + '\n' + banner, 1)
+
+              readme.write_text(text, encoding='utf-8')
+              run('git', 'add', 'README.md', 'IMAGE')
+
+              if subprocess.run(['git','diff','--cached','--quiet']).returncode != 0:
+                  run('git','-c','user.name=github-actions[bot]',
+                      '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
+                      'commit','-m','docs: organize README images under IMAGE')
+                  run('git','push','origin',branch)
+
+          apply('main')
+          run('git','fetch','origin','feature/recording-worker-3b2:feature/recording-worker-3b2', check=False)
+          apply('feature/recording-worker-3b2')
+          PY
