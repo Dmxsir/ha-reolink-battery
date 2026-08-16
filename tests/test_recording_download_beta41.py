@@ -49,8 +49,8 @@ class Beta41UidWakeReliabilityTests(unittest.TestCase):
 
     def test_diagnostics_and_version(self):
         diagnostics = DIAGNOSTICS.read_text()
-        self.assertIn('"milestone": "3B.15-uid-wake-reliability"', diagnostics)
         self.assertIn('"uid_resolve": {', diagnostics)
+        self.assertIn('"network_identifiers_exposed": False', diagnostics)
         version = json.loads(MANIFEST.read_text())["version"]
         self.assertTrue(version.startswith("0.1.2-beta."))
         self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 41)
