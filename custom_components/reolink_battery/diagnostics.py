@@ -418,6 +418,12 @@ async def async_get_config_entry_diagnostics(
             "attempts": worker.state.attempts if worker else 0,
             "retries": worker.state.retries if worker else 0,
             "completed": worker.state.completed if worker else 0,
+            "deferred_count": worker.state.deferred_count if worker else 0,
+            "deferred_rearmed_count": (
+                worker.state.deferred_rearmed_count if worker else 0
+            ),
+            "selection_policy": "newest_pending_first",
+            "deferred_rearm_policy": "new_notification",
             "last_event_time": (
                 worker.state.last_event_time.isoformat()
                 if worker and worker.state.last_event_time else None
@@ -460,7 +466,7 @@ async def async_get_config_entry_diagnostics(
             },
             "raw_path_exposed": False,
         },
-        "milestone": "3B.15-uid-wake-reliability",
+        "milestone": "3B.16-fresh-first-queue-rearm",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

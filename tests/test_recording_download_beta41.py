@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import unittest
+import json
 
 ROOT = Path(__file__).parents[1]
 TRANSPORT = ROOT / "custom_components" / "reolink_battery" / "transport.py"
@@ -50,7 +51,9 @@ class Beta41UidWakeReliabilityTests(unittest.TestCase):
         diagnostics = DIAGNOSTICS.read_text()
         self.assertIn('"milestone": "3B.15-uid-wake-reliability"', diagnostics)
         self.assertIn('"uid_resolve": {', diagnostics)
-        self.assertIn('"version": "0.1.2-beta.41"', MANIFEST.read_text())
+        version = json.loads(MANIFEST.read_text())["version"]
+        self.assertTrue(version.startswith("0.1.2-beta."))
+        self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 41)
 
 
 if __name__ == "__main__":

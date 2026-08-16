@@ -52,6 +52,7 @@ class RecordingWorkerState:
     retries: int = 0
     completed: int = 0
     deferred_count: int = 0
+    deferred_rearmed_count: int = 0
     last_event_time: datetime | None = None
     last_attempt_time: datetime | None = None
     last_completed_time: datetime | None = None
@@ -88,7 +89,11 @@ class RecordingWorker:
         self.state = RecordingWorkerState()
 
     def notify(self) -> None:
-        """Signal that the persistent queue may contain work."""
+        """Signal new work and re-arm deferred backlog for the fresh wake window."""
+        if self._deferred_event_ids:
+            self._deferred_event_ids.clear()
+            self.state.deferred_count = 0
+            self.state.deferred_rearmed_count += 1
         self.state.pending_trigger = True
         self._trigger.set()
 
@@ -98,16 +103,24 @@ class RecordingWorker:
         self._stopped.set()
         self._trigger.set()
 
-    def _oldest_android_event(self) -> CloudEvent | None:
-        """Return oldest Android event not deferred in this runtime."""
-        return next(
-            (
-                event
-                for event in self._entry.runtime_data.coordinator.pending_events
-                if event.source == "android_notification"
-                and event.event_id not in self._deferred_event_ids
-            ),
-            None,
+    def _next_android_event(self) -> CloudEvent | None:
+        """Return newest Android event not deferred in this runtime.
+
+        A fresh motion notification must not wait behind stale backlog: the camera
+        is naturally awake around the fresh event, so newest-first maximizes the
+        chance of completing that recording before deep sleep. Older pending
+        events remain persistent and are processed afterwards.
+        """
+        candidates = (
+            event
+            for event in self._entry.runtime_data.coordinator.pending_events
+            if event.source == "android_notification"
+            and event.event_id not in self._deferred_event_ids
+        )
+        return max(
+            candidates,
+            key=lambda event: event.notification_post_time or event.alarm_time,
+            default=None,
         )
 
     def _defer_event(self, event: CloudEvent) -> None:
@@ -284,7 +297,7 @@ class RecordingWorker:
         return True
 
     async def _process_trigger(self) -> None:
-        event = self._oldest_android_event()
+        event = self._next_android_event()
         while event is not None and not self._stopped.is_set():
             if not await self._settle_event(event):
                 return
@@ -310,10 +323,10 @@ class RecordingWorker:
                 # reload or HA restart clears the in-memory deferral and retries it.
                 self._defer_event(event)
 
-            # Continue to the next non-deferred pending event in the same trigger.
-            # This preserves one serialized camera worker and never opens sessions
-            # during settle/retry waits.
-            event = self._oldest_android_event()
+            # Continue newest-first through non-deferred pending events. Fresh
+            # motion gets the natural wake window; stale backlog follows without
+            # adding polling or concurrent camera sessions.
+            event = self._next_android_event()
 
     async def async_run(self) -> None:
         """Consume trigger signals until config-entry unload."""
