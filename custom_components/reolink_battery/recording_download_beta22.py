@@ -24,6 +24,29 @@ from . import recording_download_probe_beta17 as beta17
 from . import recording_download_probe_beta21 as beta21
 
 CONTENT_LAYOUT = "cmd13_prepare_cmd8_full_high_verified_atomic_mp4"
+VERIFIED_FILE_OVERHEAD_BYTES = 4 * 1024 * 1024
+VERIFIED_FILE_HARD_CAP_BYTES = 128 * 1024 * 1024
+VERIFIED_FILE_MIN_FRAME_LIMIT = beta21.STREAM_SAMPLE_MAX_FRAMES
+
+
+def _verified_collector_limits(expected_size: int) -> tuple[int, int]:
+    """Return bounded collector limits sized for the selected recording.
+
+    The 16 MiB limit belongs to the old diagnostic probe. Verified file
+    persistence must be able to collect the complete camera-reported recording,
+    while remaining bounded if metadata is corrupt.
+    """
+    expected = max(int(expected_size or 0), 0)
+    byte_limit = max(
+        beta21.STREAM_SAMPLE_MAX_BYTES,
+        expected + VERIFIED_FILE_OVERHEAD_BYTES,
+    )
+    byte_limit = min(byte_limit, VERIFIED_FILE_HARD_CAP_BYTES)
+    frame_limit = max(
+        VERIFIED_FILE_MIN_FRAME_LIMIT,
+        (byte_limit // 2048) + 1024,
+    )
+    return byte_limit, frame_limit
 
 
 @dataclass(slots=True)
@@ -143,6 +166,12 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
             encryptor, decryptor, candidate, cmd8_msg_num
         )
         self._stream_trace = _new_trace(attempted=True)
+        collector_bytes, collector_frames = _verified_collector_limits(
+            int(getattr(candidate, "size", 0) or 0)
+        )
+        self._stream_trace.sample_limit_bytes = collector_bytes
+        self._stream_trace.aggregate_limit_bytes = collector_bytes
+        self._stream_trace.sample_limit_frames = collector_frames
         self._stream_trace.single_lease_handoff = bool(
             getattr(self, "_handoff_mode", False)
         )
