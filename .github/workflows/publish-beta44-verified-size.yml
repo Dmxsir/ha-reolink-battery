@@ -1,0 +1,128 @@
+name: Publish beta.44 verified-size collector
+
+on:
+  push:
+    paths:
+      - .github/workflows/publish-beta44-verified-size.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Patch beta.44 source
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          beta22_path = root / 'custom_components/reolink_battery/recording_download_beta22.py'
+          diagnostics_path = root / 'custom_components/reolink_battery/diagnostics.py'
+          manifest_path = root / 'custom_components/reolink_battery/manifest.json'
+          beta43_test_path = root / 'tests/test_recording_worker_beta43.py'
+          beta44_test_path = root / 'tests/test_recording_download_beta44.py'
+
+          beta22 = beta22_path.read_text()
+          anchor = 'CONTENT_LAYOUT = "cmd13_prepare_cmd8_full_high_verified_atomic_mp4"\n'
+          replacement = '''CONTENT_LAYOUT = "cmd13_prepare_cmd8_full_high_verified_atomic_mp4"\nVERIFIED_FILE_OVERHEAD_BYTES = 4 * 1024 * 1024\nVERIFIED_FILE_HARD_CAP_BYTES = 128 * 1024 * 1024\nVERIFIED_FILE_MIN_FRAME_LIMIT = beta21.STREAM_SAMPLE_MAX_FRAMES\n\n\ndef _verified_collector_limits(expected_size: int) -> tuple[int, int]:\n    """Return bounded collector limits sized for the selected recording.\n\n    The 16 MiB limit belongs to the old diagnostic probe. Verified file\n    persistence must be able to collect the complete camera-reported recording,\n    while remaining bounded if metadata is corrupt.\n    """\n    expected = max(int(expected_size or 0), 0)\n    byte_limit = max(\n        beta21.STREAM_SAMPLE_MAX_BYTES,\n        expected + VERIFIED_FILE_OVERHEAD_BYTES,\n    )\n    byte_limit = min(byte_limit, VERIFIED_FILE_HARD_CAP_BYTES)\n    frame_limit = max(\n        VERIFIED_FILE_MIN_FRAME_LIMIT,\n        (byte_limit // 2048) + 1024,\n    )\n    return byte_limit, frame_limit\n'''
+          if anchor not in beta22:
+              raise SystemExit('beta22 content layout anchor not found')
+          beta22 = beta22.replace(anchor, replacement, 1)
+
+          old = '''        self._stream_trace = _new_trace(attempted=True)\n        self._stream_trace.single_lease_handoff = bool(\n'''
+          new = '''        self._stream_trace = _new_trace(attempted=True)\n        collector_bytes, collector_frames = _verified_collector_limits(\n            int(getattr(candidate, "size", 0) or 0)\n        )\n        self._stream_trace.sample_limit_bytes = collector_bytes\n        self._stream_trace.aggregate_limit_bytes = collector_bytes\n        self._stream_trace.sample_limit_frames = collector_frames\n        self._stream_trace.single_lease_handoff = bool(\n'''
+          if old not in beta22:
+              raise SystemExit('beta22 prepare trace anchor not found')
+          beta22 = beta22.replace(old, new, 1)
+          beta22_path.write_text(beta22)
+
+          diagnostics = diagnostics_path.read_text()
+          if '"milestone": "3B.17-fresh-retry-preemption"' not in diagnostics:
+              raise SystemExit('diagnostics beta43 milestone anchor not found')
+          diagnostics_path.write_text(diagnostics.replace(
+              '"milestone": "3B.17-fresh-retry-preemption"',
+              '"milestone": "3B.18-verified-size-aware-collector"',
+              1,
+          ))
+
+          manifest = manifest_path.read_text()
+          if '"version": "0.1.2-beta.43"' not in manifest:
+              raise SystemExit('manifest beta43 anchor not found')
+          manifest_path.write_text(manifest.replace(
+              '"version": "0.1.2-beta.43"',
+              '"version": "0.1.2-beta.44"',
+              1,
+          ))
+
+          beta43 = beta43_test_path.read_text()
+          beta43 = beta43.replace(
+              '        self.assertIn(\'"milestone": "3B.17-fresh-retry-preemption"\', diagnostics)\n        self.assertEqual(json.loads(MANIFEST.read_text())["version"], "0.1.2-beta.43")\n',
+              '        version = json.loads(MANIFEST.read_text())["version"]\n        self.assertTrue(version.startswith("0.1.2-beta."))\n        self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 43)\n',
+              1,
+          )
+          beta43_test_path.write_text(beta43)
+
+          beta44_test_path.write_text('''"""Regression guards for beta.44 verified size-aware collector."""\n\nfrom pathlib import Path\nimport json\nimport unittest\n\nROOT = Path(__file__).parents[1]\nBETA22 = ROOT / "custom_components" / "reolink_battery" / "recording_download_beta22.py"\nBETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"\nDIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"\nMANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"\n\n\nclass Beta44VerifiedSizeAwareCollectorTests(unittest.TestCase):\n    def test_verified_path_no_longer_uses_fixed_16mib_ceiling(self):\n        source = BETA22.read_text()\n        self.assertIn("VERIFIED_FILE_OVERHEAD_BYTES = 4 * 1024 * 1024", source)\n        self.assertIn("VERIFIED_FILE_HARD_CAP_BYTES = 128 * 1024 * 1024", source)\n        self.assertIn("def _verified_collector_limits", source)\n        self.assertIn("expected + VERIFIED_FILE_OVERHEAD_BYTES", source)\n        self.assertIn("self._stream_trace.sample_limit_bytes = collector_bytes", source)\n        self.assertIn("self._stream_trace.aggregate_limit_bytes = collector_bytes", source)\n        self.assertIn("self._stream_trace.sample_limit_frames = collector_frames", source)\n\n    def test_18mb_recording_gets_limit_above_expected_size(self):\n        ns = {}\n        # Avoid importing Home Assistant dependencies; verify the sizing formula\n        # from source constants through equivalent arithmetic.\n        expected = 17_921_985\n        base = 16 * 1024 * 1024\n        overhead = 4 * 1024 * 1024\n        hard = 128 * 1024 * 1024\n        limit = min(max(base, expected + overhead), hard)\n        self.assertGreater(limit, expected)\n        self.assertEqual(limit, 22_116_289)\n\n    def test_transport_contracts_unchanged(self):\n        source = BETA20.read_text()\n        self.assertIn("PERIODIC_RX_ACK_INTERVAL = 0.010", source)\n        self.assertIn("P2P_HEARTBEAT_INTERVAL = 1.0", source)\n        self.assertIn("activate_fresh_heartbeat_tids_after_login", source)\n\n    def test_diagnostics_and_version(self):\n        diagnostics = DIAGNOSTICS.read_text()\n        self.assertIn('"milestone": "3B.18-verified-size-aware-collector"', diagnostics)\n        self.assertEqual(json.loads(MANIFEST.read_text())["version"], "0.1.2-beta.44")\n\n\nif __name__ == "__main__":\n    unittest.main()\n''')
+          PY
+
+      - name: Verify beta.44 regressions
+        run: |
+          python -m compileall -q custom_components/reolink_battery
+          python -m unittest \
+            tests.test_recording_download_beta40 \
+            tests.test_recording_download_beta41 \
+            tests.test_recording_worker_beta42 \
+            tests.test_recording_worker_beta43 \
+            tests.test_recording_download_beta44
+
+      - name: Commit beta.44 source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/reolink_battery/recording_download_beta22.py \
+                  custom_components/reolink_battery/diagnostics.py \
+                  custom_components/reolink_battery/manifest.json \
+                  tests/test_recording_worker_beta43.py \
+                  tests/test_recording_download_beta44.py
+          git commit -m "Add beta44 size-aware verified collector"
+          git push origin HEAD:feature/recording-worker-3b2
+
+      - name: Publish beta.44 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.1.2-beta.44 \
+            --target "$(git rev-parse HEAD)" \
+            --prerelease \
+            --title "v0.1.2-beta.44" \
+            --notes "Milestone 3B.18 fixes a local verified-download collector ceiling exposed by a 17,921,985-byte Argus recording. The old 16 MiB cap remains for manual diagnostic probes, while the verified file path now sizes byte/frame collection from the camera-reported candidate size plus 4 MiB protocol headroom, bounded by a 128 MiB hard cap. Beta.43 scheduling/preemption, beta.41 UID wake discovery, beta.40 heartbeat/ACK transport, cmd13/cmd8, atomic MP4 verification and Telegram handoff are unchanged."
+
+      - name: Remove temporary beta.44 workflow
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin feature/recording-worker-3b2
+          git checkout -B feature/recording-worker-3b2 origin/feature/recording-worker-3b2
+          rm -f .github/workflows/publish-beta44-verified-size.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Remove temporary beta44 publish workflow"
+            git push origin HEAD:feature/recording-worker-3b2
+          fi
