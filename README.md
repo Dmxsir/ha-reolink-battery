@@ -82,7 +82,13 @@ On the same Android phone:
 1. Open **Home Assistant App -> Settings -> Companion App -> Manage Sensors**.
 2. Find and enable **Last Notification**.
 
-![Home Assistant Companion App - Last Notification sensor](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/Companion%20App.jpg)
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/Companion%20App.jpg" alt="Home Assistant Companion App - Last Notification sensor" width="560">
+    </td>
+  </tr>
+</table>
 
 3. Grant Home Assistant the requested **notification access** permission.
 4. Open the Last Notification sensor settings and configure its **Allow List**
@@ -150,14 +156,26 @@ Enter the email address and password for your Reolink account. This step is used
 to discover the battery cameras linked to the account and does **not** contact
 or wake the camera itself.
 
-![Reolink account sign-in](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png)
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png" alt="Reolink account sign-in" width="560">
+    </td>
+  </tr>
+</table>
 
 #### 2. Select the camera
 
 Select the battery-powered Reolink camera that you want to add to Home Assistant,
 then press **Submit**.
 
-![Select a Reolink battery camera](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png)
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png" alt="Select a Reolink battery camera" width="560">
+    </td>
+  </tr>
+</table>
 
 #### 3. Enter the camera-local credentials
 
@@ -168,7 +186,13 @@ password configured for the camera and is not your Reolink account password**.
 Select the physical LAN interface that can reach the camera directly. Do not
 select Tailscale, VPN, or other `/32` virtual interfaces.
 
-![Camera-local credentials and physical LAN interface](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png)
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png" alt="Camera-local credentials and physical LAN interface" width="560">
+    </td>
+  </tr>
+</table>
 
 #### 4. Select the Companion App notification sensor
 
