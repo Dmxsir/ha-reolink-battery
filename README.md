@@ -70,6 +70,34 @@ The config flow asks for two separate credential layers:
   legacy Argus 2E the username normally defaults to `admin`, and its password
   is not the Reolink account password.
 
+### Step-by-step setup
+
+#### 1. Sign in to your Reolink account
+
+Enter the email address and password for your Reolink account. This step is used
+to discover the battery cameras linked to the account and does **not** contact
+or wake the camera itself.
+
+![Reolink account sign-in](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-37-42.png)
+
+#### 2. Select the camera
+
+Select the battery-powered Reolink camera that you want to add to Home Assistant,
+then press **Submit**.
+
+![Select a Reolink battery camera](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-18.png)
+
+#### 3. Enter the camera-local credentials
+
+Enter the camera's own local administrator credentials. On legacy Argus cameras,
+the username is normally `admin`. The **camera-local password is the device
+password configured for the camera and is not your Reolink account password**.
+
+Select the physical LAN interface that can reach the camera directly. Do not
+select Tailscale, VPN, or other `/32` virtual interfaces.
+
+![Camera-local credentials and physical LAN interface](https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/%D7%A6%D7%99%D7%9C%D7%95%D7%9D%20%D7%9E%D7%A1%D7%9A_2026-08-16_19-40-40.png)
+
 The integration selects a physical private IPv4 LAN and rejects `/32`
 VPN/Tailscale adapters. Setup validation resolves and wakes the selected camera,
 authenticates, and disconnects immediately.
