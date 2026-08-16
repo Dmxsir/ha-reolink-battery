@@ -82,6 +82,43 @@ Credentials are stored through Home Assistant config entries. Passwords,
 account tokens, session secrets, cryptographic material, and full camera UIDs
 are excluded from diagnostics and logs.
 
+## Acknowledgements and credits
+
+This project builds on, and was made possible by, work from the wider open-source
+Home Assistant and Reolink reverse-engineering communities.
+
+- **[reolink_aio](https://github.com/starkillerOG/reolink_aio)** by
+  **starkillerOG and contributors** — the core Python Reolink API/Baichuan
+  library used directly by this integration for device communication. The
+  project is MIT licensed.
+- **[Neolink](https://github.com/thirtythreeforty/neolink)** by
+  **thirtythreeforty**, together with the extended
+  **[QuantumEntangledAndy/neolink](https://github.com/QuantumEntangledAndy/neolink)**
+  fork — an invaluable independent reverse-engineering reference for Reolink's
+  proprietary Baichuan protocol, UDP/P2P behavior, discovery, connection and
+  transport semantics. Neolink is AGPL-licensed; this project does **not**
+  incorporate Neolink source code and uses it only as a protocol/reference
+  implementation.
+- **[PyCryptodome](https://github.com/Legrandin/pycryptodome)** by
+  **Legrandin and contributors** — provides the cryptographic primitives used
+  through the `pycryptodomex` dependency.
+- **[Home Assistant](https://github.com/home-assistant/core)** and its
+  contributors — for the integration framework, config-entry APIs, event bus,
+  media-source infrastructure, diagnostics conventions, and the ecosystem this
+  integration is built for.
+- **Reolink** — for the hardware and official software behavior used during
+  interoperability testing. Official application/SDK behavior was used only as
+  a behavioral reference; no proprietary Reolink binaries, SDK files, captured
+  traffic, or recordings are distributed by this project.
+- **OpenAI Codex and ChatGPT** — used as development assistants for code review,
+  debugging, test design, protocol-analysis support, and documentation. Protocol
+  behavior and fixes were validated against source code, automated regression
+  tests, and real camera hardware before being retained.
+
+Special thanks to everyone who publishes protocol research, bug reports, test
+results, and open-source tooling around Reolink devices. That work significantly
+reduced the amount of duplicated reverse-engineering effort required here.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE). It depends on the
