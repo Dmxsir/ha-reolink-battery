@@ -14,7 +14,7 @@
 [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20the%20project-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/dmxsir)
 
 <a href="https://ko-fi.com/dmxsir">
-  <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/buymecoffe.png" alt="Buy me a coffee — support the project on Ko-fi" width="900">
+  <img src="https://raw.githubusercontent.com/Dmxsir/ha-reolink-battery/main/IMAGE/buymecoffe.png" alt="Buy me a coffee — support the project on Ko-fi" width="450">
 </a>
 
 
