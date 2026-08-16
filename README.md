@@ -1,5 +1,17 @@
 # Reolink Battery Camera for Home Assistant
 
+<div align="center">
+
+[![Release](https://img.shields.io/github/v/release/Dmxsir/ha-reolink-battery?style=for-the-badge&color=2ea44f&logo=github&label=release)](https://github.com/Dmxsir/ha-reolink-battery/releases/latest)
+[![Beta](https://img.shields.io/github/v/release/Dmxsir/ha-reolink-battery?include_prereleases&style=for-the-badge&color=orange&logo=github&label=beta)](https://github.com/Dmxsir/ha-reolink-battery/releases)
+[![Validate](https://img.shields.io/github/actions/workflow/status/Dmxsir/ha-reolink-battery/validate.yaml?branch=main&style=for-the-badge&logo=githubactions&label=validate)](https://github.com/Dmxsir/ha-reolink-battery/actions/workflows/validate.yaml)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=home-assistant)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Dmxsir&repository=ha-reolink-battery&category=integration)
+[![License](https://img.shields.io/github/license/Dmxsir/ha-reolink-battery?style=for-the-badge&color=blue)](LICENSE)
+[![Open Issues](https://img.shields.io/github/issues/Dmxsir/ha-reolink-battery?style=for-the-badge&color=red&logo=github)](https://github.com/Dmxsir/ha-reolink-battery/issues)
+[![Stars](https://img.shields.io/github/stars/Dmxsir/ha-reolink-battery?style=for-the-badge&color=yellow&logo=github)](https://github.com/Dmxsir/ha-reolink-battery/stargazers)
+
+</div>
+
 An experimental Home Assistant custom integration for battery-powered Reolink
 cameras that should not be treated like permanently online RTSP or ONVIF
 cameras.
