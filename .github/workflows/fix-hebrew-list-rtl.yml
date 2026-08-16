@@ -1,0 +1,114 @@
+name: Fix Hebrew list RTL
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-hebrew-list-rtl.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Convert Hebrew unordered Markdown lists to RTL HTML lists
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, html, subprocess
+
+          ANCHOR = '<a id="hebrew"></a>'
+
+          def inline_md(s: str) -> str:
+              # Keep the small subset of inline Markdown used by our list items.
+              placeholders = []
+              def stash(value):
+                  placeholders.append(value)
+                  return f'@@PH{len(placeholders)-1}@@'
+
+              # Links first so their URL punctuation is not escaped/reformatted later.
+              s = re.sub(r'\[([^\]]+)\]\(([^)]+)\)',
+                         lambda m: stash(f'<a href="{html.escape(m.group(2), quote=True)}">{html.escape(m.group(1))}</a>'), s)
+              s = re.sub(r'`([^`]+)`',
+                         lambda m: stash(f'<code>{html.escape(m.group(1))}</code>'), s)
+              s = re.sub(r'\*\*([^*]+)\*\*',
+                         lambda m: stash(f'<strong>{html.escape(m.group(1))}</strong>'), s)
+              s = html.escape(s, quote=False)
+              for i, value in enumerate(placeholders):
+                  s = s.replace(f'@@PH{i}@@', value)
+              return s
+
+          def transform(text: str) -> str:
+              pos = text.find(ANCHOR)
+              if pos < 0:
+                  raise SystemExit('Hebrew anchor not found')
+              head, heb = text[:pos], text[pos:]
+              lines = heb.splitlines()
+              out = []
+              in_fence = False
+              i = 0
+              while i < len(lines):
+                  line = lines[i]
+                  if line.lstrip().startswith('```'):
+                      in_fence = not in_fence
+                      out.append(line)
+                      i += 1
+                      continue
+
+                  if not in_fence and re.match(r'^-\s+', line):
+                      items = []
+                      while i < len(lines):
+                          m = re.match(r'^-\s+(.*)$', lines[i])
+                          if not m:
+                              break
+                          item = m.group(1).strip()
+                          i += 1
+                          # Fold indented continuation lines belonging to the same item.
+                          while i < len(lines) and re.match(r'^\s{2,}\S', lines[i]) and not lines[i].lstrip().startswith('```'):
+                              item += ' ' + lines[i].strip()
+                              i += 1
+                          items.append(item)
+                      out.append('<ul dir="rtl" align="right">')
+                      for item in items:
+                          out.append(f'  <li>{inline_md(item)}</li>')
+                      out.append('</ul>')
+                      continue
+
+                  out.append(line)
+                  i += 1
+              return head + '\n'.join(out) + ('\n' if text.endswith('\n') else '')
+
+          def apply(branch: str):
+              subprocess.run(['git','checkout',branch], check=True)
+              p = Path('README.md')
+              original = p.read_text(encoding='utf-8')
+              updated = transform(original)
+              if updated != original:
+                  p.write_text(updated, encoding='utf-8')
+                  subprocess.run(['git','add','README.md'], check=True)
+                  subprocess.run(['git','-c','user.name=github-actions[bot]',
+                                  '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
+                                  'commit','-m','docs: place Hebrew bullet markers on the right'], check=True)
+                  subprocess.run(['git','push','origin',branch], check=True)
+
+          apply('main')
+          subprocess.run(['git','fetch','origin','feature/recording-worker-3b2:feature/recording-worker-3b2'], check=False)
+          apply('feature/recording-worker-3b2')
+          PY
+
+      - name: Remove temporary workflow from main
+        shell: bash
+        run: |
+          git checkout main
+          git pull --ff-only origin main
+          git rm .github/workflows/fix-hebrew-list-rtl.yml
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com commit -m 'chore: remove temporary RTL list workflow'
+          git push origin main
