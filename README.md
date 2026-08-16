@@ -390,11 +390,13 @@ This project is not affiliated with or endorsed by Reolink.
 
 ## דרישות
 
-- **Home Assistant 2026.8.1 ומעלה**.
-- מצלמת Reolink מבוססת סוללה נתמכת, עם הקלטה פעילה לכרטיס SD.
-- **פרטי מנהל מקומיים של המצלמה**. במצלמות Argus ישנות שם המשתמש הוא בדרך כלל `admin`; סיסמת ההתקן המקומית נפרדת מסיסמת חשבון Reolink.
-- ממשק LAN פיזי מסוג IPv4 במחשב שעליו רץ Home Assistant, שיכול להגיע ישירות למצלמה. אין לבחור Tailscale, VPN או ממשק וירטואלי אחר מסוג `/32`.
-- לעיבוד אוטומטי של תנועה והקלטות נדרש **טלפון Android** שעליו מותקנות האפליקציה הרשמית של **Reolink** והאפליקציה הרשמית **Home Assistant Companion App**. מנגנון ההתראות הנוכחי מיועד לאנדרואיד.
+<ul dir="rtl" align="right">
+  <li><strong>Home Assistant 2026.8.1 ומעלה</strong>.</li>
+  <li>מצלמת Reolink מבוססת סוללה נתמכת, עם הקלטה פעילה לכרטיס SD.</li>
+  <li><strong>פרטי מנהל מקומיים של המצלמה</strong>. במצלמות Argus ישנות שם המשתמש הוא בדרך כלל <code>admin</code>; סיסמת ההתקן המקומית נפרדת מסיסמת חשבון Reolink.</li>
+  <li>ממשק LAN פיזי מסוג IPv4 במחשב שעליו רץ Home Assistant, שיכול להגיע ישירות למצלמה. אין לבחור Tailscale, VPN או ממשק וירטואלי אחר מסוג <code>/32</code>.</li>
+  <li>לעיבוד אוטומטי של תנועה והקלטות נדרש <strong>טלפון Android</strong> שעליו מותקנות האפליקציה הרשמית של <strong>Reolink</strong> והאפליקציה הרשמית <strong>Home Assistant Companion App</strong>. מנגנון ההתראות הנוכחי מיועד לאנדרואיד.</li>
+</ul>
 
 ### הגדרת התראות באפליקציית Reolink
 
@@ -469,8 +471,10 @@ https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
 
 תהליך ההגדרה מבקש שתי שכבות נפרדות של פרטי התחברות:
 
-- **פרטי חשבון Reolink** עבור כניסה לחשבון, MFA אופציונלי בדוא"ל, גילוי המצלמות ושליפת אירועי ענן.
-- **פרטי התחברות מקומיים למצלמה** עבור חיבור Baichuan קצר למצלמה. ב־Argus 2E ישנה שם המשתמש הוא בדרך כלל `admin`, והסיסמה אינה סיסמת חשבון Reolink.
+<ul dir="rtl" align="right">
+  <li><strong>פרטי חשבון Reolink</strong> עבור כניסה לחשבון, MFA אופציונלי בדוא"ל, גילוי המצלמות ושליפת אירועי ענן.</li>
+  <li><strong>פרטי התחברות מקומיים למצלמה</strong> עבור חיבור Baichuan קצר למצלמה. ב־Argus 2E ישנה שם המשתמש הוא בדרך כלל <code>admin</code>, והסיסמה אינה סיסמת חשבון Reolink.</li>
+</ul>
 
 ### הגדרה שלב אחר שלב
 
@@ -626,12 +630,14 @@ max: 10
 
 פרויקט זה נשען על עבודה חשובה של קהילות הקוד הפתוח של Home Assistant ושל חוקרי Reolink, ולא היה מתאפשר באותה צורה בלעדיהן.
 
-- **[reolink_aio](https://github.com/starkillerOG/reolink_aio)** מאת **starkillerOG והתורמים** — ספריית Python מרכזית עבור Reolink API/Baichuan, שבה האינטגרציה משתמשת ישירות לתקשורת עם ההתקן. הפרויקט מופץ ברישיון MIT.
-- **[Neolink](https://github.com/thirtythreeforty/neolink)** מאת **thirtythreeforty**, יחד עם ה־fork המורחב **[QuantumEntangledAndy/neolink](https://github.com/QuantumEntangledAndy/neolink)** — מקור השוואה חשוב מאוד ל־reverse engineering של פרוטוקול Baichuan הקנייני של Reolink, התנהגות UDP/P2P, גילוי, חיבור ו־transport. Neolink מופץ ברישיון AGPL; פרויקט זה **אינו** משלב קוד מקור של Neolink ומשתמש בו רק כיישום ייחוס לפרוטוקול.
-- **[PyCryptodome](https://github.com/Legrandin/pycryptodome)** מאת **Legrandin והתורמים** — מספק את הרכיבים הקריפטוגרפיים שבהם נעשה שימוש דרך התלות `pycryptodomex`.
-- **[Home Assistant](https://github.com/home-assistant/core)** והתורמים — עבור מסגרת האינטגרציות, ממשקי config entry, event bus, תשתית media source, מוסכמות diagnostics והמערכת האקולוגית שעליה בנויה האינטגרציה.
-- **Reolink** — עבור החומרה וההתנהגות של התוכנה הרשמית ששימשו לבדיקות interoperability. ההתנהגות של האפליקציה/SDK הרשמיים שימשה כהשוואה התנהגותית בלבד; הפרויקט אינו מפיץ קבצי SDK קנייניים של Reolink, קבצים בינאריים, תעבורת רשת מוקלטת או הקלטות מצלמה.
-- **OpenAI Codex ו־ChatGPT** — שימשו ככלי עזר לפיתוח עבור code review, debugging, תכנון בדיקות, תמיכה בניתוח פרוטוקולים ותיעוד. התנהגות הפרוטוקול והתיקונים אומתו מול קוד המקור, בדיקות regression אוטומטיות וחומרת מצלמה אמיתית לפני שנשמרו בפרויקט.
+<ul dir="rtl" align="right">
+  <li><strong>@@PH0@@</strong> מאת <strong>starkillerOG והתורמים</strong> — ספריית Python מרכזית עבור Reolink API/Baichuan, שבה האינטגרציה משתמשת ישירות לתקשורת עם ההתקן. הפרויקט מופץ ברישיון MIT.</li>
+  <li><strong>@@PH0@@</strong> מאת <strong>thirtythreeforty</strong>, יחד עם ה־fork המורחב <strong>@@PH1@@</strong> — מקור השוואה חשוב מאוד ל־reverse engineering של פרוטוקול Baichuan הקנייני של Reolink, התנהגות UDP/P2P, גילוי, חיבור ו־transport. Neolink מופץ ברישיון AGPL; פרויקט זה <strong>אינו</strong> משלב קוד מקור של Neolink ומשתמש בו רק כיישום ייחוס לפרוטוקול.</li>
+  <li><strong>@@PH0@@</strong> מאת <strong>Legrandin והתורמים</strong> — מספק את הרכיבים הקריפטוגרפיים שבהם נעשה שימוש דרך התלות <code>pycryptodomex</code>.</li>
+  <li><strong>@@PH0@@</strong> והתורמים — עבור מסגרת האינטגרציות, ממשקי config entry, event bus, תשתית media source, מוסכמות diagnostics והמערכת האקולוגית שעליה בנויה האינטגרציה.</li>
+  <li><strong>Reolink</strong> — עבור החומרה וההתנהגות של התוכנה הרשמית ששימשו לבדיקות interoperability. ההתנהגות של האפליקציה/SDK הרשמיים שימשה כהשוואה התנהגותית בלבד; הפרויקט אינו מפיץ קבצי SDK קנייניים של Reolink, קבצים בינאריים, תעבורת רשת מוקלטת או הקלטות מצלמה.</li>
+  <li><strong>OpenAI Codex ו־ChatGPT</strong> — שימשו ככלי עזר לפיתוח עבור code review, debugging, תכנון בדיקות, תמיכה בניתוח פרוטוקולים ותיעוד. התנהגות הפרוטוקול והתיקונים אומתו מול קוד המקור, בדיקות regression אוטומטיות וחומרת מצלמה אמיתית לפני שנשמרו בפרויקט.</li>
+</ul>
 
 תודה מיוחדת לכל מי שמפרסם מחקרי פרוטוקול, דיווחי באגים, תוצאות בדיקות וכלי קוד פתוח עבור התקני Reolink. העבודה הזו צמצמה משמעותית עבודה כפולה של reverse engineering.
 
