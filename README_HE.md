@@ -1,6 +1,8 @@
+<div dir="rtl" align="right">
+
 # מצלמת Reolink מבוססת סוללה ל־Home Assistant
 
-<div align="center">
+<div align="center" dir="ltr">
 
 [![Release](https://img.shields.io/github/v/release/Dmxsir/ha-reolink-battery?style=for-the-badge&color=2ea44f&logo=github&label=release)](https://github.com/Dmxsir/ha-reolink-battery/releases/latest)
 [![Beta](https://img.shields.io/github/v/release/Dmxsir/ha-reolink-battery?include_prereleases&style=for-the-badge&color=orange&logo=github&label=beta)](https://github.com/Dmxsir/ha-reolink-battery/releases)
@@ -19,6 +21,8 @@
 
 המצלמה העיקרית שנבדקה היא **Reolink Argus 2E**. תהליך העבודה המתוכנן הוא:
 
+<div dir="ltr" align="left">
+
 ```text
 אירוע תנועה
 -> התראת Push מאפליקציית Reolink באנדרואיד
@@ -30,6 +34,8 @@
 -> אירוע של Home Assistant
 -> אוטומציה אופציונלית (לדוגמה Telegram)
 ```
+
+</div>
 
 ## מצב הפיתוח
 
@@ -179,15 +185,21 @@ https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
 
 לאחר שההקלטה הורדה במלואה ואומתה, האינטגרציה יורה את האירוע:
 
+<div dir="ltr" align="left">
+
 ```text
 reolink_battery_recording_ready
 ```
+
+</div>
 
 נתוני האירוע השימושיים כוללים את `device_name`, `alarm_time`, `file_path`, `media_content_id` ו־`file_size`.
 
 ### שליחת ההקלטה ל־Telegram
 
 החלף את ישות ההתראה של Telegram בישות שלך.
+
+<div dir="ltr" align="left">
 
 ```yaml
 alias: Reolink - שליחת הקלטת תנועה לטלגרם
@@ -206,16 +218,24 @@ mode: queued
 max: 10
 ```
 
+</div>
+
 ### שליחה ל־Telegram ומחיקת העותק המקומי לאחר מכן
 
 אם Telegram משמש אותך לאחסון לטווח ארוך ואינך רוצה שהקלטות שהורדו יצטברו על שרת Home Assistant, הוסף את `shell_command` הבא אל `configuration.yaml`:
+
+<div dir="ltr" align="left">
 
 ```yaml
 shell_command:
   delete_reolink_recording: 'rm -f -- "{{ file_path }}"'
 ```
 
+</div>
+
 לאחר מכן השתמש באוטומציה כגון:
+
+<div dir="ltr" align="left">
 
 ```yaml
 alias: Reolink - שליחת הקלטה לטלגרם וניקוי מקומי
@@ -251,6 +271,8 @@ mode: queued
 max: 10
 ```
 
+</div>
+
 בדיקת הנתיב מגבילה בכוונה את המחיקה לקובצי MP4 בתוך תיקיית ברירת המחדל `/media/reolink_battery/`. אם אתה משתמש בתיקיית media מותאמת אישית ב־Home Assistant, שנה את תחילת הנתיב בהתאם. לאחר הוספת `shell_command`, בצע Reload ל־**Shell Commands** או הפעל מחדש את Home Assistant.
 
 ## פרטיות ואבטחה
@@ -275,3 +297,5 @@ max: 10
 הפרויקט מופץ תחת [רישיון MIT](LICENSE). הוא תלוי בחבילת `reolink-aio` המופצת גם היא ברישיון MIT ואינו כולל קבצים בינאריים קנייניים של Reolink, קובצי SDK, תעבורת רשת מוקלטת או הקלטות.
 
 פרויקט זה אינו קשור ל־Reolink ואינו מאושר או נתמך על ידה.
+
+</div>
