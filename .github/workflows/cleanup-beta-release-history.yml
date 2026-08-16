@@ -1,0 +1,65 @@
+name: Cleanup old beta release history
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cleanup-beta-release-history.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - name: Delete old v0.1.2 beta releases and tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          keep_tag() {
+            case "$1" in
+              v0.1.2-beta.43|v0.1.2-beta.44|v0.1.2-beta.45) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          echo 'Deleting old beta releases...'
+          gh api --paginate "repos/$REPO/releases?per_page=100" \
+            --jq '.[] | [.id, .tag_name] | @tsv' |
+          while IFS=$'\t' read -r release_id tag; do
+            [[ "$tag" == v0.1.2-beta.* ]] || continue
+            keep_tag "$tag" && continue
+            echo "Deleting release $tag ($release_id)"
+            gh api --method DELETE "repos/$REPO/releases/$release_id"
+          done
+
+          echo 'Deleting old beta tags...'
+          gh api --paginate "repos/$REPO/tags?per_page=100" --jq '.[].name' |
+          while IFS= read -r tag; do
+            [[ "$tag" == v0.1.2-beta.* ]] || continue
+            keep_tag "$tag" && continue
+            echo "Deleting tag $tag"
+            gh api --method DELETE "repos/$REPO/git/refs/tags/$tag"
+          done
+
+          echo 'Retained beta releases/tags:'
+          printf '%s\n' v0.1.2-beta.43 v0.1.2-beta.44 v0.1.2-beta.45
+
+      - name: Remove temporary cleanup workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/cleanup-beta-release-history.yml
+          git commit -m 'Remove temporary beta release cleanup workflow'
+          git push origin HEAD:feature/recording-worker-3b2
