@@ -1,0 +1,60 @@
+name: Finalize beta.42
+
+on:
+  push:
+    branches:
+      - feature/recording-worker-3b2
+    paths:
+      - .github/workflows/finalize-beta42.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/recording-worker-3b2
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Verify beta.42 regressions
+        run: |
+          python -m compileall -q custom_components/reolink_battery
+          python -m unittest tests.test_recording_download_beta40 tests.test_recording_download_beta41 tests.test_recording_worker_beta42
+
+      - name: Publish beta.42 prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: e77581e8ca3db8f7627fecc885f24e0104d01d95
+        run: |
+          git tag -f v0.1.2-beta.42 "$SOURCE_SHA"
+          git push origin -f v0.1.2-beta.42
+          gh release create v0.1.2-beta.42 \
+            --repo Dmxsir/ha-reolink-battery \
+            --target "$SOURCE_SHA" \
+            --title "v0.1.2-beta.42" \
+            --prerelease \
+            --notes "Milestone 3B.16 changes only worker scheduling. Fresh Android motion events are selected newest-first so a live wake window is not consumed by stale backlog. A new notification also re-arms previously deferred pending events; after the fresh recording is handled, older persistent events can retry while the battery camera is naturally awake. Beta.41 15-second LAN wake discovery, beta.40 post-auth fresh heartbeat IDs, 10 ms periodic-only inclusive-highest ACK, cmd13/cmd8 transport, MP4 verification and Telegram handoff are unchanged. No cloud P2P/relay video path was added."
+
+      - name: Remove temporary finalize workflow
+        if: always()
+        run: |
+          git fetch origin feature/recording-worker-3b2
+          git checkout -B feature/recording-worker-3b2 origin/feature/recording-worker-3b2
+          rm -f .github/workflows/finalize-beta42.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Remove temporary beta42 finalize workflow"
+            git push origin HEAD:feature/recording-worker-3b2
+          fi
