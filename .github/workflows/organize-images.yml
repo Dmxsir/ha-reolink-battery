@@ -18,7 +18,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Move images and update README
+      - name: Finish README image organization
         shell: bash
         run: |
           python3 - <<'PY'
@@ -48,8 +48,8 @@ jobs:
           def apply(branch):
               run('git', 'checkout', branch)
               run('git', 'pull', '--ff-only', 'origin', branch)
-              Path('IMAGE').mkdir(exist_ok=True)
 
+              Path('IMAGE').mkdir(exist_ok=True)
               moved = False
               for name in images:
                   src = Path(name)
@@ -58,8 +58,9 @@ jobs:
                       run('git', 'mv', str(src), str(dst))
                       moved = True
 
+              # Remove placeholder only where real images exist on that branch.
               keep = Path('IMAGE/.gitkeep')
-              if keep.exists():
+              if keep.exists() and any((Path('IMAGE') / name).exists() for name in images):
                   run('git', 'rm', str(keep))
 
               readme = Path('README.md')
@@ -73,7 +74,7 @@ jobs:
                       text = text.replace(marker, marker + '\n' + banner, 1)
 
               readme.write_text(text, encoding='utf-8')
-              run('git', 'add', 'README.md', 'IMAGE')
+              run('git', 'add', '-A', 'README.md', 'IMAGE')
 
               if subprocess.run(['git','diff','--cached','--quiet']).returncode != 0:
                   run('git','-c','user.name=github-actions[bot]',
