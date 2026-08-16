@@ -46,6 +46,8 @@ cloud-only and does not use the separately stored camera-local password.
 
 ## HACS installation
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Dmxsir&repository=ha-reolink-battery&category=integration)
+
 1. Open **HACS** in Home Assistant.
 2. Select **Integrations**.
 3. Open the menu and select **Custom repositories**.
