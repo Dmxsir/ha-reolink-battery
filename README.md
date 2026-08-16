@@ -9,6 +9,7 @@
 [![License](https://img.shields.io/github/license/Dmxsir/ha-reolink-battery?style=for-the-badge&color=blue)](LICENSE)
 [![Open Issues](https://img.shields.io/github/issues/Dmxsir/ha-reolink-battery?style=for-the-badge&color=red&logo=github)](https://github.com/Dmxsir/ha-reolink-battery/issues)
 [![Stars](https://img.shields.io/github/stars/Dmxsir/ha-reolink-battery?style=for-the-badge&color=yellow&logo=github)](https://github.com/Dmxsir/ha-reolink-battery/stargazers)
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20the%20project-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/dmxsir)
 
 </div>
 
