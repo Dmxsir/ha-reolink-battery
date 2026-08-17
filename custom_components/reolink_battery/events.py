@@ -7,7 +7,12 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .const import MAX_PENDING_EVENTS, MAX_PROCESSED_EVENT_IDS, MEANINGFUL_ALARM_TYPES
+from .const import (
+    MAX_COMPLETED_RECORDINGS,
+    MAX_PENDING_EVENTS,
+    MAX_PROCESSED_EVENT_IDS,
+    MEANINGFUL_ALARM_TYPES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +56,33 @@ class CloudEvent:
             ),
             title=str(data.get("title") or ""),
             text=str(data.get("text") or ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedRecording:
+    """Persistent secret-safe identity for one verified SD recording."""
+
+    fingerprint: str
+    start_time: datetime
+    end_time: datetime
+    size: int
+
+    def as_storage(self) -> dict[str, object]:
+        return {
+            "fingerprint": self.fingerprint,
+            "start_time": self.start_time.isoformat(),
+            "end_time": self.end_time.isoformat(),
+            "size": self.size,
+        }
+
+    @classmethod
+    def from_storage(cls, data: dict[str, object]) -> "CompletedRecording":
+        return cls(
+            fingerprint=str(data["fingerprint"]),
+            start_time=datetime.fromisoformat(str(data["start_time"])),
+            end_time=datetime.fromisoformat(str(data["end_time"])),
+            size=int(data.get("size") or 0),
         )
 
 
@@ -135,6 +167,7 @@ class EventQueue:
         self._processed: list[str] = []
         self._processed_set: set[str] = set()
         self._pending: list[CloudEvent] = []
+        self._completed_recordings: list[CompletedRecording] = []
 
     @property
     def pending(self) -> tuple[CloudEvent, ...]:
@@ -143,6 +176,22 @@ class EventQueue:
     @property
     def processed_count(self) -> int:
         return len(self._processed)
+
+    @property
+    def completed_recording_fingerprints(self) -> frozenset[str]:
+        return frozenset(item.fingerprint for item in self._completed_recordings)
+
+    @property
+    def completed_recording_count(self) -> int:
+        return len(self._completed_recordings)
+
+    def remember_completed_recording(self, recording: CompletedRecording) -> bool:
+        if recording.fingerprint in self.completed_recording_fingerprints:
+            return False
+        self._completed_recordings.append(recording)
+        if len(self._completed_recordings) > MAX_COMPLETED_RECORDINGS:
+            self._completed_recordings = self._completed_recordings[-MAX_COMPLETED_RECORDINGS:]
+        return True
 
     def enqueue(self, event: CloudEvent) -> bool:
         if event.event_id in self._processed_set:
@@ -166,6 +215,7 @@ class EventQueue:
             return
         processed = data.get("processed")
         pending = data.get("pending")
+        completed_recordings = data.get("completed_recordings")
         if isinstance(processed, list):
             self._processed = [str(value) for value in processed][
                 -MAX_PROCESSED_EVENT_IDS:
@@ -185,9 +235,23 @@ class EventQueue:
                 if event.event_id not in self._processed_set:
                     self._processed.append(event.event_id)
                     self._processed_set.add(event.event_id)
+        if isinstance(completed_recordings, list):
+            restored_recordings: list[CompletedRecording] = []
+            for item in completed_recordings[-MAX_COMPLETED_RECORDINGS:]:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    restored_recordings.append(CompletedRecording.from_storage(item))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self._completed_recordings = restored_recordings
 
     def as_storage(self) -> dict[str, object]:
         return {
             "processed": self._processed[-MAX_PROCESSED_EVENT_IDS:],
             "pending": [event.as_storage() for event in self._pending],
+            "completed_recordings": [
+                recording.as_storage()
+                for recording in self._completed_recordings[-MAX_COMPLETED_RECORDINGS:]
+            ],
         }

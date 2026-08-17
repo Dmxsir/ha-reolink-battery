@@ -24,6 +24,7 @@ from .recording_probe import (
     FileInfoTrace,
     RecordingCandidate,
     _list_recordings_file_info,
+    recording_fingerprint,
     select_recording_candidate,
 )
 from .transport import (
@@ -65,6 +66,26 @@ class DownloadPrepareError(CameraStageError):
         super().__init__(stage)
         self.failure_type = failure_type
         self.response_code = response_code
+        self.file_info_trace = file_info_trace
+        self.uid_resolve_trace = uid_resolve_trace
+
+
+class RecordingAlreadyCompletedError(Exception):
+    """The selected FileInfo recording was already completed earlier."""
+
+    def __init__(
+        self,
+        fingerprint: str,
+        candidate_start: datetime,
+        candidate_end: datetime,
+        *,
+        file_info_trace: FileInfoTrace,
+        uid_resolve_trace: UidResolveTrace,
+    ) -> None:
+        super().__init__("recording already completed")
+        self.fingerprint = fingerprint
+        self.candidate_start = candidate_start
+        self.candidate_end = candidate_end
         self.file_info_trace = file_info_trace
         self.uid_resolve_trace = uid_resolve_trace
 
@@ -116,6 +137,7 @@ class DownloadPrepareResult:
     candidate_start: datetime
     candidate_end: datetime
     candidate_distance_seconds: float
+    candidate_fingerprint: str
     request: Cmd13RequestMetadata
     response: FileDownloadFrameMetadata
     response_accepted: bool
@@ -424,6 +446,7 @@ async def async_prepare_download_for_event(
     *,
     resolve_timeout: float = UID_RESOLVE_TIMEOUT_SECONDS,
     command_timeout: int = 30,
+    completed_recording_fingerprints: frozenset[str] | None = None,
 ) -> DownloadPrepareResult:
     """Find the event recording, send one metadata-enriched cmd13 probe, then close."""
     lease = None
@@ -502,6 +525,19 @@ async def async_prepare_download_for_event(
                 "RECORDING_MATCH_ERROR", file_info_trace=file_info_trace
             )
 
+        candidate_fingerprint = recording_fingerprint(uid, candidate)
+        if (
+            completed_recording_fingerprints
+            and candidate_fingerprint in completed_recording_fingerprints
+        ):
+            raise RecordingAlreadyCompletedError(
+                candidate_fingerprint,
+                candidate.start_time,
+                candidate.end_time,
+                file_info_trace=file_info_trace,
+                uid_resolve_trace=uid_resolve_trace,
+            )
+
         failure_stage = "DOWNLOAD_PREPARE_FRAME_ERROR"
         wire, request, identity_trace = _build_cmd13_wire(host.baichuan, uid, candidate)
         try:
@@ -527,6 +563,7 @@ async def async_prepare_download_for_event(
             candidate_start=candidate.start_time,
             candidate_end=candidate.end_time,
             candidate_distance_seconds=candidate.distance_seconds,
+            candidate_fingerprint=candidate_fingerprint,
             request=request,
             response=response,
             response_accepted=response.response_code

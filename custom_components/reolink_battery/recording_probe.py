@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import logging
 from dataclasses import dataclass
@@ -149,6 +150,26 @@ def _interval_distance(target: datetime, start: datetime, end: datetime) -> floa
     if target < start:
         return (start - target).total_seconds()
     return (target - end).total_seconds()
+
+
+def recording_fingerprint(uid: str, candidate: RecordingCandidate) -> str:
+    """Return a stable non-reversible identity for one SD recording."""
+    identity = (
+        candidate.record_id
+        or candidate.xml_file_name
+        or candidate.file_name
+        or candidate.display_name
+    )
+    canonical = "\x1f".join(
+        (
+            uid,
+            candidate.start_time.isoformat(timespec="seconds"),
+            candidate.end_time.isoformat(timespec="seconds"),
+            str(int(candidate.size or 0)),
+            identity,
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def select_recording_candidate(
