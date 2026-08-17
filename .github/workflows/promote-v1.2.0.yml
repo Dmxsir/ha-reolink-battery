@@ -1,0 +1,189 @@
+name: Promote v1.2.0 stable
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/promote-v1.2.0.yml
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Promote beta45 code to stable main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --tags --force origin
+
+          # Promote the exact tested beta45 code/tests. Keep main-only public docs,
+          # images, funding metadata and repository presentation intact.
+          git checkout v0.1.2-beta.45 -- custom_components/reolink_battery tests PHASE3_MILESTONE_3B1.md
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          manifest_path = Path('custom_components/reolink_battery/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          manifest['version'] = '1.2.0'
+          manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+          readme_path = Path('README.md')
+          text = readme_path.read_text(encoding='utf-8')
+
+          old_beta_badge = '[![Beta](https://img.shields.io/github/v/release/Dmxsir/ha-reolink-battery?include_prereleases&style=for-the-badge&color=orange&logo=github&label=beta)](https://github.com/Dmxsir/ha-reolink-battery/releases)'
+          new_beta_badge = '[![Diagnostic Beta](https://img.shields.io/badge/diagnostic-v0.1.2--beta.45-orange?style=for-the-badge&logo=github)](https://github.com/Dmxsir/ha-reolink-battery/releases/tag/v0.1.2-beta.45)'
+          text = text.replace(old_beta_badge, new_beta_badge)
+
+          text = text.replace(
+              'An experimental Home Assistant custom integration for battery-powered Reolink\n'
+              'cameras that should not be treated like permanently online RTSP or ONVIF\n'
+              'cameras.',
+              'A Home Assistant custom integration for battery-powered Reolink cameras that\n'
+              'should not be treated like permanently online RTSP or ONVIF cameras.'
+          )
+
+          text = text.replace(
+              'The current tested baseline is **v0.1.2-beta.45**. It is being kept unchanged\n'
+              'for a soak-test period before promotion to the next stable release.',
+              'The current stable release is **v1.2.0**. It is promoted directly from the\n'
+              'validated **v0.1.2-beta.45** codebase with no protocol or transport behavior\n'
+              'changes. **v0.1.2-beta.45** is retained as a diagnostic reference release for\n'
+              'deeper troubleshooting if needed.'
+          )
+
+          text = text.replace(
+              'אינטגרציה ניסיונית מותאמת אישית ל־Home Assistant עבור מצלמות Reolink מבוססות סוללה, שאינן מיועדות להתנהג כמו מצלמות RTSP או ONVIF המחוברות באופן קבוע לרשת.',
+              'אינטגרציה מותאמת אישית ל־Home Assistant עבור מצלמות Reolink מבוססות סוללה, שאינן מיועדות להתנהג כמו מצלמות RTSP או ONVIF המחוברות באופן קבוע לרשת.'
+          )
+
+          text = text.replace(
+              'גרסת הבסיס הנבדקת כרגע היא **v0.1.2-beta.45**. הגרסה נשמרת ללא שינויים למשך תקופת soak test לפני קידומה לגרסה היציבה הבאה.',
+              'הגרסה היציבה הנוכחית היא **v1.2.0**. היא קודמה ישירות מבסיס הקוד המאומת של **v0.1.2-beta.45**, ללא שינוי בהתנהגות ה־protocol או ה־transport. גרסת **v0.1.2-beta.45** נשמרת כגרסת אבחון לצורך דיבאג מעמיק במידת הצורך.'
+          )
+
+          readme_path.write_text(text, encoding='utf-8')
+          PY
+
+          cat > CHANGELOG.md <<'EOF'
+          # Changelog
+
+          ## Current stable release
+
+          ### v1.2.0 — Stable
+          - First official stable release of the automatic Reolink battery-camera recording workflow.
+          - Promoted directly from the validated `v0.1.2-beta.45` codebase with no protocol or transport behavior changes.
+          - Verified end-to-end flow: Android/Reolink motion notification → Home Assistant queue → battery-camera wake/auth → FileInfo lookup → cmd13/cmd8 download → exact MP4 verification → Home Assistant recording-ready event → optional Telegram handoff.
+          - Uses the authoritative recording size reported by accepted cmd13 to resize the verified download collector before cmd8, allowing verified recordings larger than the former 16 MiB ceiling while retaining the 128 MiB hard cap.
+          - Keeps newest-first queue processing, bounded retry recovery, fresh-event retry preemption, persistent pending events, exact-size MP4 verification and atomic finalization.
+          - `v0.1.2-beta.45` remains available as the diagnostic prerelease/reference baseline if deeper troubleshooting is required.
+
+          ## Retained diagnostic beta releases
+
+          ### v0.1.2-beta.45 — Milestone 3B.19
+          - Stable `v1.2.0` is based directly on this tested code path.
+          - Fixes the remaining 16 MiB verified-download collector stop by resizing the verified collector from the authoritative size reported in the accepted cmd13 response before cmd8 begins.
+          - Keeps the 128 MiB verified-file hard cap and the 16 MiB manual diagnostic-probe cap.
+
+          ### v0.1.2-beta.44 — Milestone 3B.18
+          - First size-aware verified collector attempt.
+          - Demonstrated that FileInfo candidate size is not reliable enough on the tested Argus 2E; candidate size could remain zero and leave the collector at the legacy 16 MiB diagnostic ceiling.
+
+          ### v0.1.2-beta.43 — Milestone 3B.17
+          - Added fresh-motion retry preemption so a newer Android motion can interrupt an older event's 30/60-second retry wait without cancelling an active camera/download session.
+          - Added prior-attempt telemetry so the next attempt does not erase the previous failure stage, UID timing, stream termination reason, bytes received, expected size, or disconnect state.
+
+          ## Historical milestones preserved in Git history
+
+          ### v0.1.2-beta.41 — Milestone 3B.15
+          - Extended LAN UID discovery to 15 seconds with 500 ms resend cadence and added secret-safe discovery telemetry.
+
+          ### v0.1.2-beta.40 — Transport baseline
+          - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
+
+          ## Release policy
+          - `v1.2.0` is the stable public release line.
+          - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
+          - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
+          - Refactor legacy beta-named modules only in a separate behavior-preserving cleanup after the stable release is proven.
+          EOF
+
+          # Remove heredoc indentation introduced by YAML block indentation.
+          sed -i 's/^          //' CHANGELOG.md
+
+          git add custom_components/reolink_battery tests PHASE3_MILESTONE_3B1.md README.md CHANGELOG.md
+          git commit -m 'release: promote beta45 to v1.2.0 stable'
+          git push origin main
+
+      - name: Verify stable manifest and beta45 source parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(python3 -c "import json; print(json.load(open('custom_components/reolink_battery/manifest.json'))['version'])")" = "1.2.0"
+
+          # Compare production source against beta45 while allowing only the
+          # intentional stable version-string change in manifest.json.
+          tmpdir="$(mktemp -d)"
+          git archive v0.1.2-beta.45 custom_components/reolink_battery | tar -x -C "$tmpdir"
+          python3 - <<'PY' "$tmpdir/custom_components/reolink_battery/manifest.json"
+          import json, sys
+          p = sys.argv[1]
+          data = json.load(open(p, encoding='utf-8'))
+          data['version'] = '1.2.0'
+          open(p, 'w', encoding='utf-8').write(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+          PY
+          diff -ru "$tmpdir/custom_components/reolink_battery" custom_components/reolink_battery
+          python3 -m compileall -q custom_components/reolink_battery
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+      - name: Create official v1.2.0 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<'EOF'
+          ## Reolink Battery v1.2.0
+
+          First official stable release of the automatic battery-camera recording workflow.
+
+          This release is promoted directly from the tested **v0.1.2-beta.45** code path. There are **no protocol or transport behavior changes** between beta45 and the stable production source; the stable release changes the public version to **1.2.0** and updates the public documentation/release metadata.
+
+          ### Highlights
+          - Reolink Android push notification → Home Assistant Companion **Last Notification** → persistent event queue.
+          - Battery-safe camera wake and local legacy authentication.
+          - Matching SD-card recording lookup and verified cmd13/cmd8 full-high/mainStream download.
+          - Dynamic verified collector sizing from the authoritative cmd13-reported recording size, removing the former 16 MiB verified-download ceiling while retaining the 128 MiB hard cap.
+          - Exact-size MP4 verification, fsync and atomic rename before completion.
+          - Bounded retry recovery, newest-first processing and newer-motion retry preemption.
+          - `reolink_battery_recording_ready` Home Assistant event for Telegram or other automations.
+          - Secret-safe diagnostics for wake, UDP transport, download and worker state.
+
+          ### Diagnostic beta retained
+          **v0.1.2-beta.45** remains published as a diagnostic/reference prerelease and is not modified by this release.
+
+          Primary validated hardware: **Reolink Argus 2E**.
+          EOF
+          sed -i 's/^          //' /tmp/release-notes.md
+
+          if gh release view v1.2.0 >/dev/null 2>&1; then
+            echo 'v1.2.0 release already exists; refusing to replace it.' >&2
+            exit 1
+          fi
+          gh release create v1.2.0 --target main --title 'v1.2.0' --notes-file /tmp/release-notes.md --latest
