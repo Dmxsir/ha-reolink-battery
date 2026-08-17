@@ -20,6 +20,7 @@ CONF_DEVICE_USERNAME = "device_username"
 CONF_DEVICE_PASSWORD = "device_password"
 CONF_INTERFACE = "interface"
 CONF_LOCAL_STATE = "local_state"
+CONF_NOTIFICATION_ENTITY = "notification_entity"
 
 AUTH_PATH_LEGACY = "legacy_local_credential"
 
@@ -31,5 +32,7 @@ MAX_PENDING_EVENTS = 100
 
 MESSAGE_CENTER_PATH = "/v2/message-center/devices/msgs/query"
 MEANINGFUL_ALARM_TYPES = frozenset({"AI", "MD", "MOTION", "PEOPLE", "PERSON"})
+REOLINK_ANDROID_PACKAGE = "com.mcu.reolink"
+REOLINK_NOTIFICATION_CHANNEL = "push.wav"
 
 STORAGE_VERSION = 1

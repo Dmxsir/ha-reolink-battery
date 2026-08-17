@@ -23,9 +23,16 @@ from reolink_aio.baichuan.util import (
     decrypt_udp_baichuan,
     encrypt_udp_baichuan,
 )
+from reolink_aio.exceptions import ReolinkConnectionError
 
 DISCOVERY_PORTS = (2018, 2015)
 DISCOVERY_MAGIC = bytes.fromhex("3acf872a")
+BAICHUAN_MAGIC = bytes.fromhex("f0debc0a")
+FILE_DOWNLOAD_MESSAGE_CLASS = 0x6482
+FILE_DOWNLOAD_CLASS_WIRE = FILE_DOWNLOAD_MESSAGE_CLASS.to_bytes(2, "little")
+MODERN_24_CLASS_WIRE = (0x6414).to_bytes(2, "little")
+UID_RESOLVE_TIMEOUT_SECONDS = 15.0
+UID_RESOLVE_RESEND_SECONDS = 0.5
 
 
 def linux_ipv4_interface(source_ip: str) -> tuple[str, int]:
@@ -131,8 +138,20 @@ def _parse_reply(data: bytes, expected_client_id: int) -> int | None:
 
 
 @dataclass(slots=True)
+class UidResolveTrace:
+    """Secret-safe timing/cadence telemetry for one UID LAN wake attempt."""
+
+    timeout_seconds: float = UID_RESOLVE_TIMEOUT_SECONDS
+    resend_interval_seconds: float = UID_RESOLVE_RESEND_SECONDS
+    send_rounds: int = 0
+    datagrams_sent: int = 0
+    elapsed_ms: float | None = None
+    succeeded: bool = False
+
+
+@dataclass(slots=True)
 class UidLanLease:
-    """Temporary UID discovery lease retained until transport is open."""
+    """UID discovery lease whose live socket can be handed to Baichuan."""
 
     host: str
     port: int
@@ -140,30 +159,64 @@ class UidLanLease:
     interface_index: int
     client_id: int
     device_id: int
-    socket: socket.socket
+    transaction_id: int
+    socket: socket.socket | None
+
+    def detach_socket(self) -> socket.socket:
+        """Transfer socket ownership without sending a discovery disconnect."""
+        sock = self.socket
+        if sock is None or sock.fileno() < 0:
+            raise RuntimeError("UID LAN lease socket is not available")
+        self.socket = None
+        return sock
 
     def close(self) -> None:
-        if self.socket.fileno() < 0:
+        sock = self.socket
+        if sock is None or sock.fileno() < 0:
             return
         body = xmls.UDP_DISCONNECT_XML.format(
             client_id=self.client_id, host_id=self.device_id
         )
         try:
-            self.socket.sendto(_packet(body), (self.host, self.port))
+            sock.sendto(_packet(body), (self.host, self.port))
         finally:
-            self.socket.close()
+            sock.close()
+            self.socket = None
+
+
+@dataclass(frozen=True, slots=True)
+class FileDownloadFrameMetadata:
+    """Secret-safe metadata for the first matching cmd13 response frame."""
+
+    response_code: int
+    message_class: int
+    header_channel_id: int
+    stream_type: int
+    msg_num: int
+    body_length: int
+    payload_offset: int
+    payload_length: int
 
 
 def resolve_uid_lan(
     uid: str,
     interface: ipaddress.IPv4Interface,
-    timeout: float = 10.0,
+    timeout: float = UID_RESOLVE_TIMEOUT_SECONDS,
+    trace: UidResolveTrace | None = None,
 ) -> UidLanLease:
     """Resolve and wake one UID on the explicitly selected LAN."""
     if not uid.isalnum() or len(uid) > 127:
         raise ValueError("UID must contain 1-127 alphanumeric characters")
     if timeout <= 0:
         raise ValueError("timeout must be positive")
+    started_at = time.monotonic()
+    if trace is not None:
+        trace.timeout_seconds = float(timeout)
+        trace.resend_interval_seconds = UID_RESOLVE_RESEND_SECONDS
+        trace.send_rounds = 0
+        trace.datagrams_sent = 0
+        trace.elapsed_ms = None
+        trace.succeeded = False
     _, interface_index = linux_ipv4_interface(str(interface.ip))
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -185,6 +238,7 @@ def resolve_uid_lan(
         mtu=1350,
     ).replace("<p>WIN</p>", "<p>MAC</p>")
     packet = _packet(body)
+    transaction_id = int.from_bytes(packet[12:16], "little")
     targets = _broadcast_targets(interface)
     deadline = time.monotonic() + timeout
     next_send = 0.0
@@ -194,13 +248,19 @@ def resolve_uid_lan(
             if now >= next_send:
                 for target in targets:
                     sock.sendto(packet, target)
-                next_send = now + 0.5
+                if trace is not None:
+                    trace.send_rounds += 1
+                    trace.datagrams_sent += len(targets)
+                next_send = now + UID_RESOLVE_RESEND_SECONDS
             try:
                 data, address = sock.recvfrom(65535)
             except TimeoutError:
                 continue
             device_id = _parse_reply(data, client_id)
             if device_id is not None:
+                if trace is not None:
+                    trace.elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 3)
+                    trace.succeeded = True
                 return UidLanLease(
                     address[0],
                     address[1],
@@ -208,19 +268,99 @@ def resolve_uid_lan(
                     interface_index,
                     client_id,
                     device_id,
+                    transaction_id,
                     sock,
                 )
     except BaseException:
+        if trace is not None and trace.elapsed_ms is None:
+            trace.elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 3)
         sock.close()
         raise
+    if trace is not None:
+        trace.elapsed_ms = round((time.monotonic() - started_at) * 1000.0, 3)
     sock.close()
     raise TimeoutError(f"UID LAN resolution timed out after {timeout:.1f} seconds")
 
 
 class _IdempotentUdpClientProtocol(BaichuanUdpClientProtocol):
-    """Make connection close idempotent as validated in Phase 2."""
+    """Make close idempotent and observe the file-download 0x6482 class."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._file_download_probe_future: asyncio.Future[
+            FileDownloadFrameMetadata
+        ] | None = None
+        self._file_download_expected_msg_num: int | None = None
+        self._patched_file_download_class = False
+
+    def arm_file_download_probe(
+        self, expected_msg_num: int
+    ) -> asyncio.Future[FileDownloadFrameMetadata]:
+        """Observe the first matching cmd13 frame without retaining payload bytes."""
+        if (
+            self._file_download_probe_future is not None
+            and not self._file_download_probe_future.done()
+        ):
+            raise RuntimeError("file download probe already armed")
+        self._file_download_expected_msg_num = expected_msg_num
+        self._file_download_probe_future = self._loop.create_future()
+        return self._file_download_probe_future
+
+    def clear_file_download_probe(self) -> None:
+        """Drop the temporary observer."""
+        self._file_download_probe_future = None
+        self._file_download_expected_msg_num = None
+
+    def parse_bc_data(self) -> None:
+        """Observe cmd13 as channel/stream/msgNum16, then keep reolink-aio usable."""
+        raw = self._data
+        if len(raw) >= 20:
+            cmd_id = int.from_bytes(raw[4:8], "little")
+            body_length = int.from_bytes(raw[8:12], "little")
+            header_channel_id = raw[12]
+            stream_type = raw[13]
+            msg_num = int.from_bytes(raw[14:16], "little")
+            expected = self._file_download_expected_msg_num
+            if (
+                cmd_id == 13
+                and expected is not None
+                and msg_num == expected
+                and len(raw) >= 24 + body_length
+            ):
+                future = self._file_download_probe_future
+                if future is not None and not future.done():
+                    response_code = int.from_bytes(raw[16:18], "little")
+                    message_class = int.from_bytes(raw[18:20], "little")
+                    payload_offset = int.from_bytes(raw[20:24], "little")
+                    if payload_offset > body_length:
+                        payload_offset = body_length
+                    future.set_result(
+                        FileDownloadFrameMetadata(
+                            response_code=response_code,
+                            message_class=message_class,
+                            header_channel_id=header_channel_id,
+                            stream_type=stream_type,
+                            msg_num=msg_num,
+                            body_length=body_length,
+                            payload_offset=payload_offset,
+                            payload_length=max(0, body_length - payload_offset),
+                        )
+                    )
+
+            raw_class = raw[18:20]
+            if raw_class == FILE_DOWNLOAD_CLASS_WIRE:
+                self._patched_file_download_class = True
+                patched = bytearray(raw)
+                patched[18:20] = MODERN_24_CLASS_WIRE
+                self._data = bytes(patched)
+
+        super().parse_bc_data()
+        self._patched_file_download_class = False
 
     def connection_lost(self, exc: Exception | None = None) -> None:
+        future = self._file_download_probe_future
+        if future is not None and not future.done():
+            future.set_exception(exc or ConnectionError("Baichuan connection closed"))
         if not self.close_future.done():
             super().connection_lost(exc)
 
@@ -228,16 +368,71 @@ class _IdempotentUdpClientProtocol(BaichuanUdpClientProtocol):
 class BoundBaichuanUdpConnection(BaichuanUdpConnection):
     """Baichuan UDP connection pinned to the selected source IPv4."""
 
-    def __init__(self, host: str, source_ip: str, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        host: str,
+        source_ip: str,
+        *args,
+        handoff_lease: UidLanLease | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(host, *args, **kwargs)
         self.source_ip = source_ip
+        self._handoff_mode = handoff_lease is not None
+        self._handoff_lease = handoff_lease
+        self._handoff_active = False
+        self._handoff_transaction_id: int | None = None
+
+    def _take_handoff_socket(
+        self,
+    ) -> tuple[socket.socket, UidLanLease] | None:
+        lease = self._handoff_lease
+        if lease is None:
+            return None
+        if lease.host != self._host or lease.source_ip != self.source_ip:
+            raise OSError("UID LAN lease does not match requested Baichuan endpoint")
+        sock = lease.detach_socket()
+        self._handoff_lease = None
+        self._handoff_active = True
+        self._handoff_transaction_id = lease.transaction_id
+        return sock, lease
+
+    def _apply_handoff_protocol(
+        self, protocol: BaichuanUdpClientProtocol, lease: UidLanLease
+    ) -> None:
+        protocol.client_id = lease.client_id
+        protocol.host_id = lease.device_id
+        protocol.remote_port = lease.port
+        self._port = lease.port
+
+    async def connect(self):
+        """Adopt the discovery socket once; never create a second P2P identity."""
+        if not self._handoff_mode:
+            await super().connect()
+            return
+        if self.connection_open:
+            return
+        if self._handoff_lease is None:
+            raise ReolinkConnectionError(
+                f"Baichuan host {self._host}: single lease session cannot be reopened"
+            )
+        await BaichuanBaseConnection.connect(self)
+        if not self.connection_open:
+            raise ReolinkConnectionError(
+                f"Baichuan host {self._host}: single lease handoff did not open"
+            )
 
     async def _create_connection(
         self,
     ) -> tuple[asyncio.DatagramTransport, BaichuanUdpClientProtocol]:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
+        handoff = self._take_handoff_socket()
+        lease = None
+        if handoff is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind((self.source_ip, 0))
+        else:
+            sock, lease = handoff
+        try:
             sock.setblocking(False)
             transport, protocol = await self._loop.create_datagram_endpoint(
                 lambda: _IdempotentUdpClientProtocol(
@@ -254,7 +449,29 @@ class BoundBaichuanUdpConnection(BaichuanUdpConnection):
             sock.close()
             raise
         _, self._local_port = transport.get_extra_info("sockname")
+        if lease is not None:
+            self._apply_handoff_protocol(protocol, lease)
         return transport, protocol
+
+    async def send_file_download_probe(
+        self,
+        wire: bytes,
+        *,
+        expected_msg_num: int,
+        timeout: float = 10.0,
+    ) -> FileDownloadFrameMetadata:
+        """Send one prebuilt cmd13 frame and observe only its matching response frame."""
+        if not self.connection_open:
+            await self.connect()
+        protocol = self._protocol
+        if not isinstance(protocol, _IdempotentUdpClientProtocol):
+            raise RuntimeError("unexpected Baichuan UDP protocol")
+        future = protocol.arm_file_download_probe(expected_msg_num)
+        try:
+            await self.send_without_wait(wire, cmd_id=13, timeout=min(timeout, 5.0))
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        finally:
+            protocol.clear_file_download_probe()
 
     async def close(self) -> None:
         protocol = self._protocol

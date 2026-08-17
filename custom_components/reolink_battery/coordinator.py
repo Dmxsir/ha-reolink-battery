@@ -117,6 +117,15 @@ class ReolinkBatteryCoordinator:
             await self._store.async_save(self._queue.as_storage())
         return len(accepted)
 
+    async def async_complete_event(self, event_id: str) -> bool:
+        """Remove one pending item only after a verified recording is durable."""
+        before = len(self._queue.pending)
+        self._queue.remove(event_id)
+        changed = len(self._queue.pending) != before
+        if changed:
+            await self._store.async_save(self._queue.as_storage())
+        return changed
+
     async def async_poll(self) -> int:
         """Poll one recent cloud-only window and enqueue new events."""
         now = datetime.now(UTC)

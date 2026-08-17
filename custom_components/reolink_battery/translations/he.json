@@ -48,20 +48,56 @@
       "unsupported_auth_path": "אבן דרך זו תומכת רק במסלול האישורים המקומיים שאומת."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "גשר התראות תנועה",
+        "description": "ניתן לבחור את חיישן Last Notification של אפליקציית Home Assistant Companion בטלפון Android שמקבל את התראות Reolink. הטיפול בהקלטה לאחר ההורדה נשאר בכוונה לאוטומציות של Home Assistant.",
+        "data": {
+          "notification_entity": "ישות מקור ההתראות"
+        },
+        "data_description": {
+          "notification_entity": "בחר את חיישן Last Notification של Companion App. השאר ריק כדי להשבית את גשר ההתראות."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
-      "battery": {"name": "סוללה"},
-      "storage_total": {"name": "נפח אחסון כולל"},
-      "storage_used": {"name": "אחסון בשימוש"},
-      "storage_free": {"name": "אחסון פנוי"},
-      "wifi_signal": {"name": "עוצמת אות Wi-Fi"},
-      "last_local_refresh": {"name": "רענון מקומי אחרון"}
+      "battery": {
+        "name": "סוללה"
+      },
+      "storage_total": {
+        "name": "נפח אחסון כולל"
+      },
+      "storage_used": {
+        "name": "אחסון בשימוש"
+      },
+      "storage_free": {
+        "name": "אחסון פנוי"
+      },
+      "wifi_signal": {
+        "name": "עוצמת אות Wi-Fi"
+      },
+      "last_local_refresh": {
+        "name": "רענון מקומי אחרון"
+      }
     },
     "binary_sensor": {
-      "charging": {"name": "בטעינה"}
+      "charging": {
+        "name": "בטעינה"
+      }
     },
     "button": {
-      "refresh_device_status": {"name": "רענון מצב המצלמה"}
+      "refresh_device_status": {
+        "name": "רענון מצב המצלמה"
+      },
+      "find_pending_recording": {
+        "name": "מצא הקלטה לאירוע הממתין"
+      },
+      "prepare_pending_recording_download": {
+        "name": "הכן הורדת הקלטה ממתינה"
+      }
     }
   }
 }

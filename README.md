@@ -5,7 +5,7 @@
 <div align="center">
 
 [![Release](https://img.shields.io/github/v/release/Dmxsir/ha-reolink-battery?style=for-the-badge&color=2ea44f&logo=github&label=release)](https://github.com/Dmxsir/ha-reolink-battery/releases/latest)
-[![Beta](https://img.shields.io/github/v/release/Dmxsir/ha-reolink-battery?include_prereleases&style=for-the-badge&color=orange&logo=github&label=beta)](https://github.com/Dmxsir/ha-reolink-battery/releases)
+[![Diagnostic Beta](https://img.shields.io/badge/diagnostic-v0.1.2--beta.45-orange?style=for-the-badge&logo=github)](https://github.com/Dmxsir/ha-reolink-battery/releases/tag/v0.1.2-beta.45)
 [![Validate](https://img.shields.io/github/actions/workflow/status/Dmxsir/ha-reolink-battery/validate.yaml?branch=main&style=for-the-badge&logo=githubactions&label=validate)](https://github.com/Dmxsir/ha-reolink-battery/actions/workflows/validate.yaml)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=home-assistant)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Dmxsir&repository=ha-reolink-battery&category=integration)
 [![License](https://img.shields.io/github/license/Dmxsir/ha-reolink-battery?style=for-the-badge&color=blue)](LICENSE)
@@ -22,9 +22,8 @@
 
 </div>
 
-An experimental Home Assistant custom integration for battery-powered Reolink
-cameras that should not be treated like permanently online RTSP or ONVIF
-cameras.
+A Home Assistant custom integration for battery-powered Reolink cameras that
+should not be treated like permanently online RTSP or ONVIF cameras.
 
 The primary tested device is the **Reolink Argus 2E**. The intended workflow is:
 
@@ -42,8 +41,10 @@ Motion event
 
 ## Development status
 
-The current tested baseline is **v0.1.2-beta.45**. It is being kept unchanged
-for a soak-test period before promotion to the next stable release.
+The current stable release is **v1.2.0**. It is promoted directly from the
+validated **v0.1.2-beta.45** codebase with no protocol or transport behavior
+changes. **v0.1.2-beta.45** is retained as a diagnostic reference release for
+deeper troubleshooting if needed.
 
 The automatic recording worker is operational: a matching Android Reolink push
 notification is queued, the worker waits for the camera recording to settle,
@@ -365,7 +366,7 @@ This project is not affiliated with or endorsed by Reolink.
 
 ## עברית — מצלמת Reolink מבוססת סוללה ל־Home Assistant
 
-אינטגרציה ניסיונית מותאמת אישית ל־Home Assistant עבור מצלמות Reolink מבוססות סוללה, שאינן מיועדות להתנהג כמו מצלמות RTSP או ONVIF המחוברות באופן קבוע לרשת.
+אינטגרציה מותאמת אישית ל־Home Assistant עבור מצלמות Reolink מבוססות סוללה, שאינן מיועדות להתנהג כמו מצלמות RTSP או ONVIF המחוברות באופן קבוע לרשת.
 
 המצלמה העיקרית שנבדקה היא **Reolink Argus 2E**. תהליך העבודה המתוכנן הוא:
 
@@ -387,7 +388,7 @@ This project is not affiliated with or endorsed by Reolink.
 
 ## מצב הפיתוח
 
-גרסת הבסיס הנבדקת כרגע היא **v0.1.2-beta.45**. הגרסה נשמרת ללא שינויים למשך תקופת soak test לפני קידומה לגרסה היציבה הבאה.
+הגרסה היציבה הנוכחית היא **v1.2.0**. היא קודמה ישירות מבסיס הקוד המאומת של **v0.1.2-beta.45**, ללא שינוי בהתנהגות ה־protocol או ה־transport. גרסת **v0.1.2-beta.45** נשמרת כגרסת אבחון לצורך דיבאג מעמיק במידת הצורך.
 
 מנגנון ההורדה האוטומטי פעיל: התראת Reolink תואמת שמתקבלת באנדרואיד נכנסת לתור, ה־worker ממתין שהמצלמה תסיים את ההקלטה, פותח חיבור Baichuan מקומי קצר, מוריד את ההקלטה המתאימה מכרטיס ה־SD, מאמת את קובץ ה־MP4 בדיסק ולאחר מכן יורה את אירוע Home Assistant בשם `reolink_battery_recording_ready`.
 

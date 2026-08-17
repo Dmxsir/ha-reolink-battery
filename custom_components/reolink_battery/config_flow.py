@@ -8,9 +8,15 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import network
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, CONF_USERNAME
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
 from reolink_aio.exceptions import CredentialsInvalidError, ReolinkConnectionError
 
 from .camera import CameraStageError, async_validate_legacy_device
@@ -34,6 +40,7 @@ from .const import (
     CONF_LOCAL_STATE,
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
+    CONF_NOTIFICATION_ENTITY,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRES_AT,
     CONF_UID,
@@ -46,11 +53,25 @@ from .lan import lan_network_choices
 
 _LOGGER = logging.getLogger(__name__)
 
+_NOTIFICATION_OPTIONS_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_NOTIFICATION_ENTITY): EntitySelector(
+            EntitySelectorConfig(domain="sensor")
+        ),
+    }
+)
+
 
 class ReolinkBatteryConfigFlow(ConfigFlow, domain=DOMAIN):
     """Configure one battery camera from a Reolink account."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Create the options flow."""
+        return ReolinkBatteryOptionsFlow()
 
     def __init__(self) -> None:
         self._email = ""
@@ -194,7 +215,9 @@ class ReolinkBatteryConfigFlow(ConfigFlow, domain=DOMAIN):
                     else "cannot_connect_device"
                 )
             except CredentialsInvalidError as err:
-                _LOGGER.debug("Local validation rejected credentials: %s", type(err).__name__)
+                _LOGGER.debug(
+                    "Local validation rejected credentials: %s", type(err).__name__
+                )
                 errors["base"] = "invalid_device_auth"
             except (ReolinkConnectionError, OSError, TimeoutError) as err:
                 _LOGGER.debug("Local validation failed: %s", type(err).__name__)
@@ -239,4 +262,21 @@ class ReolinkBatteryConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+
+class ReolinkBatteryOptionsFlow(OptionsFlowWithReload):
+    """Configure the optional HA Companion notification source."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage integration options."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                _NOTIFICATION_OPTIONS_SCHEMA, self.config_entry.options
+            ),
         )

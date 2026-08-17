@@ -1,14 +1,23 @@
 {
   "domain": "reolink_battery",
   "name": "Reolink Battery",
-  "codeowners": ["@Dmxsir"],
+  "codeowners": [
+    "@Dmxsir"
+  ],
   "config_flow": true,
-  "dependencies": ["network"],
+  "dependencies": [
+    "network"
+  ],
   "documentation": "https://github.com/Dmxsir/ha-reolink-battery",
   "integration_type": "device",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Dmxsir/ha-reolink-battery/issues",
-  "loggers": ["reolink_aio"],
-  "requirements": ["pycryptodomex==3.23.0", "reolink-aio==0.21.8"],
-  "version": "0.1.0"
+  "loggers": [
+    "reolink_aio"
+  ],
+  "requirements": [
+    "pycryptodomex==3.23.0",
+    "reolink-aio==0.21.8"
+  ],
+  "version": "1.2.0"
 }
