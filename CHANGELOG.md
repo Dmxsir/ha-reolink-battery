@@ -2,6 +2,14 @@
 
 ## Current stable release
 
+### v1.2.1 — Recording deduplication
+- Prevents duplicate Home Assistant/Telegram delivery when multiple Android Reolink notifications map to the same physical SD-card clip.
+- Stores a bounded, persistent SHA-256 recording fingerprint derived from the camera UID plus FileInfo identity, start/end timestamps and size. Raw filenames/record IDs are not exposed in diagnostics.
+- Checks the persistent fingerprint set after FileInfo selection and before cmd13/cmd8, so duplicate events are completed silently without downloading the same MP4 again or firing a second `reolink_battery_recording_ready` event.
+- Adds secret-safe dedupe diagnostics (`completed_recording_count`, `deduplicated_recordings`, last duplicate presence/time and policy).
+- Keeps the v1.2.0 / beta45 transport, heartbeat, ACK, retry and verified-file behavior unchanged.
+- `v0.1.2-beta.45` remains unchanged as the diagnostic transport reference.
+
 ### v1.2.0 — Stable
 - First official stable release of the automatic Reolink battery-camera recording workflow.
 - Promoted directly from the validated `v0.1.2-beta.45` codebase with no protocol or transport behavior changes.
@@ -34,7 +42,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.2.0` is the stable public release line.
+- `v1.2.1` is the stable public release line.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
 - Refactor legacy beta-named modules only in a separate behavior-preserving cleanup after the stable release is proven.

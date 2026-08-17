@@ -12,7 +12,7 @@ from homeassistant.helpers.storage import Store
 
 from .cloud import CloudEventDecodeError, CloudTokens, ReolinkCloudClient
 from .const import DEFAULT_EVENT_WINDOW, DEFAULT_POLL_INTERVAL, DOMAIN, STORAGE_VERSION
-from .events import CloudEvent, EventQueue, parse_cloud_events
+from .events import CompletedRecording, CloudEvent, EventQueue, parse_cloud_events
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +70,14 @@ class ReolinkBatteryCoordinator:
     def processed_event_count(self) -> int:
         return self._queue.processed_count
 
+    @property
+    def completed_recording_fingerprints(self) -> frozenset[str]:
+        return self._queue.completed_recording_fingerprints
+
+    @property
+    def completed_recording_count(self) -> int:
+        return self._queue.completed_recording_count
+
     async def async_initialize(self) -> None:
         self._queue.load(await self._store.async_load())
         if self._queue.pending:
@@ -117,12 +125,22 @@ class ReolinkBatteryCoordinator:
             await self._store.async_save(self._queue.as_storage())
         return len(accepted)
 
-    async def async_complete_event(self, event_id: str) -> bool:
-        """Remove one pending item only after a verified recording is durable."""
+    async def async_complete_event(
+        self,
+        event_id: str,
+        *,
+        completed_recording: CompletedRecording | None = None,
+    ) -> bool:
+        """Complete an event and atomically remember its verified recording."""
         before = len(self._queue.pending)
         self._queue.remove(event_id)
         changed = len(self._queue.pending) != before
-        if changed:
+        recording_added = (
+            self._queue.remember_completed_recording(completed_recording)
+            if completed_recording is not None
+            else False
+        )
+        if changed or recording_added:
             await self._store.async_save(self._queue.as_storage())
         return changed
 

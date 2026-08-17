@@ -51,6 +51,9 @@ class RecordingWorkerState:
     attempts: int = 0
     retries: int = 0
     completed: int = 0
+    deduplicated_recordings: int = 0
+    last_duplicate_event_time: datetime | None = None
+    last_duplicate_recording_fingerprint_present: bool = False
     deferred_count: int = 0
     deferred_rearmed_count: int = 0
     retry_preemptions: int = 0
@@ -249,6 +252,8 @@ class RecordingWorker:
         # Keep protocol-heavy imports lazy: normal HA startup never contacts the
         # camera and does not need to initialize this path until work exists.
         from .camera import CameraStageError
+        from .events import CompletedRecording
+        from .recording_download_probe import RecordingAlreadyCompletedError
         from .recording_download_beta22 import (
             apply_stream_probe_trace,
             async_prepare_download_for_event,
@@ -292,6 +297,7 @@ class RecordingWorker:
         self.state.last_file_saved = False
         self.state.last_file_size = 0
         self.state.last_ready_event_fired = False
+        self.state.last_duplicate_recording_fingerprint_present = False
         self.state.last_uid_resolve_timeout_seconds = 0.0
         self.state.last_uid_resolve_resend_interval_seconds = 0.0
         self.state.last_uid_resolve_send_rounds = 0
@@ -328,7 +334,21 @@ class RecordingWorker:
                     output_dir=str(output_dir),
                     telemetry_owner="worker",
                     telemetry_event_time=event_time,
+                    completed_recording_fingerprints=frozenset(
+                        self._entry.runtime_data.coordinator.completed_recording_fingerprints
+                    ),
                 )
+        except RecordingAlreadyCompletedError as err:
+            self._apply_uid_resolve_trace(err.uid_resolve_trace)
+            await self._entry.runtime_data.coordinator.async_complete_event(event.event_id)
+            self.state.deduplicated_recordings += 1
+            self.state.last_duplicate_event_time = event_time
+            self.state.last_duplicate_recording_fingerprint_present = bool(
+                err.fingerprint
+            )
+            self.state.last_failure_stage = ""
+            self.state.last_failure_type = ""
+            return True
         except CameraStageError as err:
             self._apply_uid_resolve_trace(getattr(err, "uid_resolve_trace", None))
             apply_stream_probe_trace(
@@ -370,8 +390,18 @@ class RecordingWorker:
             self.state.last_failure_stage = "RECORDING_FILE_VERIFY_ERROR"
             return False
 
-        # Persistent queue completion happens only after disk verification.
-        await self._entry.runtime_data.coordinator.async_complete_event(event.event_id)
+        # Persist the recording fingerprint before publishing the ready event.
+        # A later notification that maps to this exact FileInfo recording is
+        # completed silently before cmd13/cmd8, preventing duplicate Telegram sends.
+        await self._entry.runtime_data.coordinator.async_complete_event(
+            event.event_id,
+            completed_recording=CompletedRecording(
+                fingerprint=result.candidate_fingerprint,
+                start_time=result.candidate_start,
+                end_time=result.candidate_end,
+                size=expected_size,
+            ),
+        )
         self.state.completed += 1
         self.state.last_completed_time = datetime.now(UTC)
         self.state.last_file_saved = True

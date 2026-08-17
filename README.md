@@ -41,10 +41,13 @@ Motion event
 
 ## Development status
 
-The current stable release is **v1.2.0**. It is promoted directly from the
-validated **v0.1.2-beta.45** codebase with no protocol or transport behavior
-changes. **v0.1.2-beta.45** is retained as a diagnostic reference release for
-deeper troubleshooting if needed.
+The current stable release is **v1.2.1**. It keeps the validated
+**v0.1.2-beta.45 / v1.2.0 transport baseline unchanged** and adds persistent
+recording-level deduplication. If multiple Android notifications map to the same
+SD-card recording, the already-completed recording fingerprint is detected after
+FileInfo lookup and before cmd13/cmd8, so only one
+`reolink_battery_recording_ready` event is published. **v0.1.2-beta.45** remains
+available as the diagnostic transport reference.
 
 The automatic recording worker is operational: a matching Android Reolink push
 notification is queued, the worker waits for the camera recording to settle,
@@ -388,7 +391,7 @@ This project is not affiliated with or endorsed by Reolink.
 
 ## מצב הפיתוח
 
-הגרסה היציבה הנוכחית היא **v1.2.0**. היא קודמה ישירות מבסיס הקוד המאומת של **v0.1.2-beta.45**, ללא שינוי בהתנהגות ה־protocol או ה־transport. גרסת **v0.1.2-beta.45** נשמרת כגרסת אבחון לצורך דיבאג מעמיק במידת הצורך.
+הגרסה היציבה הנוכחית היא **v1.2.1**. היא משאירה ללא שינוי את בסיס ה־transport המאומת של **v0.1.2-beta.45 / v1.2.0**, ומוסיפה מנגנון deduplication מתמשך ברמת ההקלטה. אם כמה התראות Android ממופות לאותה הקלטה בכרטיס ה־SD, האינטגרציה מזהה fingerprint של הקלטה שכבר הושלמה לאחר FileInfo ולפני cmd13/cmd8, ולכן נורה רק אירוע `reolink_battery_recording_ready` אחד. גרסת **v0.1.2-beta.45** נשמרת כרפרנס אבחוני ל־transport.
 
 מנגנון ההורדה האוטומטי פעיל: התראת Reolink תואמת שמתקבלת באנדרואיד נכנסת לתור, ה־worker ממתין שהמצלמה תסיים את ההקלטה, פותח חיבור Baichuan מקומי קצר, מוריד את ההקלטה המתאימה מכרטיס ה־SD, מאמת את קובץ ה־MP4 בדיסק ולאחר מכן יורה את אירוע Home Assistant בשם `reolink_battery_recording_ready`.
 
