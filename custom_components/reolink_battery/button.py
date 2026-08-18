@@ -22,6 +22,12 @@ from .const import (
     CONF_UID,
     DOMAIN,
 )
+from .live_stream_diagnostics import (
+    apply_live_probe_error,
+    apply_live_probe_result,
+    reset_live_probe_state,
+)
+from .live_stream_probe import LiveStreamProbeError, async_probe_live_stream
 from .recording_download_beta22 import (
     apply_file_info_trace,
     apply_identity_trace,
@@ -40,6 +46,10 @@ if TYPE_CHECKING:
 REFRESH_DESCRIPTION = ButtonEntityDescription(
     key="refresh_device_status",
     translation_key="refresh_device_status",
+)
+LIVE_STREAM_PROBE_DESCRIPTION = ButtonEntityDescription(
+    key="probe_live_stream",
+    translation_key="probe_live_stream",
 )
 FIND_RECORDING_DESCRIPTION = ButtonEntityDescription(
     key="find_pending_recording",
@@ -60,6 +70,7 @@ async def async_setup_entry(
     async_add_entities(
         (
             ReolinkRefreshDeviceStatusButton(entry),
+            ReolinkProbeLiveStreamButton(entry),
             ReolinkFindPendingRecordingButton(entry),
             ReolinkPreparePendingRecordingDownloadButton(entry),
         )
@@ -87,6 +98,41 @@ class ReolinkRefreshDeviceStatusButton(ButtonEntity):
             await async_refresh_local_status(self.hass, self._entry)
         except LocalStatusRefreshError as err:
             raise HomeAssistantError(err.stage) from None
+
+
+class ReolinkProbeLiveStreamButton(ButtonEntity):
+    """Run one explicit bounded 10-second main-stream Baichuan probe."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    entity_description = LIVE_STREAM_PROBE_DESCRIPTION
+
+    def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_probe_live_stream"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._entry.data[CONF_UID])})
+
+    async def async_press(self) -> None:
+        """Wake, authenticate, sample mainStream for 10 seconds, stop, and close."""
+        reset_live_probe_state(self._entry.entry_id, stream_kind="main")
+        try:
+            async with self._entry.runtime_data.local_operation_lock:
+                result = await async_probe_live_stream(
+                    self._entry.data[CONF_UID],
+                    self._entry.data[CONF_DEVICE_USERNAME],
+                    self._entry.data[CONF_DEVICE_PASSWORD],
+                    ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]),
+                    stream="main",
+                    duration=10.0,
+                )
+        except LiveStreamProbeError as err:
+            apply_live_probe_error(self._entry.entry_id, err)
+            raise HomeAssistantError(err.stage) from None
+
+        apply_live_probe_result(self._entry.entry_id, result)
 
 
 class ReolinkFindPendingRecordingButton(ButtonEntity):
