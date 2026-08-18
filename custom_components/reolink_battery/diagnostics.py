@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import ReolinkBatteryConfigEntry
 from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
+from .live_stream_diagnostics import live_probe_state
 from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
 from .recording_download_beta22 import stream_probe_state
 from .recording_probe import probe_state
@@ -32,6 +33,7 @@ async def async_get_config_entry_diagnostics(
     recording = probe_state(entry.entry_id)
     prepare = download_prepare_state(entry.entry_id)
     stream = stream_probe_state(entry.entry_id)
+    live = live_probe_state(entry.entry_id)
     worker = entry.runtime_data.recording_worker
     return {
         "device": {
@@ -60,9 +62,7 @@ async def async_get_config_entry_diagnostics(
             "message_center_http_status": coordinator.last_http_status,
             "message_center_wrapped": coordinator.last_response_wrapped,
             "message_center_items": coordinator.last_item_count,
-            "message_center_next_token_present": (
-                coordinator.last_next_token_present
-            ),
+            "message_center_next_token_present": coordinator.last_next_token_present,
             "last_cloud_event_type": coordinator.last_event_type or None,
             "last_cloud_event_ai_types": list(coordinator.last_event_ai_types),
             "last_event_id_present": coordinator.last_event_id_present,
@@ -96,12 +96,8 @@ async def async_get_config_entry_diagnostics(
             "last_notification_post_time_ms": (
                 bridge.last_notification_post_time_ms if bridge else None
             ),
-            "last_post_time_changed": (
-                bridge.last_post_time_changed if bridge else None
-            ),
-            "last_event_fingerprint": (
-                bridge.last_event_fingerprint if bridge else ""
-            ),
+            "last_post_time_changed": bridge.last_post_time_changed if bridge else None,
+            "last_event_fingerprint": bridge.last_event_fingerprint if bridge else "",
             "last_processing_lag_seconds": (
                 bridge.last_processing_lag_seconds if bridge else None
             ),
@@ -113,18 +109,12 @@ async def async_get_config_entry_diagnostics(
             "manual_only": True,
             "attempted": recording.attempted,
             "success": recording.success,
-            "event_time": (
-                recording.event_time.isoformat() if recording.event_time else None
-            ),
+            "event_time": recording.event_time.isoformat() if recording.event_time else None,
             "candidate_start": (
-                recording.candidate_start.isoformat()
-                if recording.candidate_start
-                else None
+                recording.candidate_start.isoformat() if recording.candidate_start else None
             ),
             "candidate_end": (
-                recording.candidate_end.isoformat()
-                if recording.candidate_end
-                else None
+                recording.candidate_end.isoformat() if recording.candidate_end else None
             ),
             "candidate_size": recording.candidate_size,
             "candidate_distance_seconds": recording.candidate_distance_seconds,
@@ -136,18 +126,12 @@ async def async_get_config_entry_diagnostics(
             "manual_only": True,
             "attempted": prepare.attempted,
             "success": prepare.success,
-            "event_time": (
-                prepare.event_time.isoformat() if prepare.event_time else None
-            ),
+            "event_time": prepare.event_time.isoformat() if prepare.event_time else None,
             "candidate_start": (
-                prepare.candidate_start.isoformat()
-                if prepare.candidate_start
-                else None
+                prepare.candidate_start.isoformat() if prepare.candidate_start else None
             ),
             "candidate_end": (
-                prepare.candidate_end.isoformat()
-                if prepare.candidate_end
-                else None
+                prepare.candidate_end.isoformat() if prepare.candidate_end else None
             ),
             "candidate_distance_seconds": prepare.candidate_distance_seconds,
             "response_present": prepare.response_present,
@@ -216,8 +200,7 @@ async def async_get_config_entry_diagnostics(
                 and prepare.request_header_channel_id is not None
                 and prepare.request_stream_type is not None
                 and prepare.request_msg_num is not None
-                and prepare.request_header_channel_id
-                == prepare.response_header_channel_id
+                and prepare.request_header_channel_id == prepare.response_header_channel_id
                 and prepare.request_stream_type == prepare.response_stream_type
                 and prepare.request_msg_num == prepare.response_msg_num
             ),
@@ -247,30 +230,14 @@ async def async_get_config_entry_diagnostics(
                 "p2p_heartbeat_attempted": stream.p2p_heartbeat_attempted,
                 "p2p_heartbeat_count": stream.p2p_heartbeat_count,
                 "p2p_heartbeat_interval_seconds": stream.p2p_heartbeat_interval_seconds,
-                "p2p_heartbeat_started_after_handoff": (
-                    stream.p2p_heartbeat_started_after_handoff
-                ),
-                "p2p_heartbeat_first_delay_seconds": (
-                    stream.p2p_heartbeat_first_delay_seconds
-                ),
-                "p2p_heartbeat_pre_cmd13_count": (
-                    stream.p2p_heartbeat_pre_cmd13_count
-                ),
-                "p2p_heartbeat_background_task_active": (
-                    stream.p2p_heartbeat_background_task_active
-                ),
-                "p2p_heartbeat_fresh_tid_enabled": (
-                    stream.p2p_heartbeat_fresh_tid_enabled
-                ),
-                "p2p_heartbeat_unique_tid_count": (
-                    stream.p2p_heartbeat_unique_tid_count
-                ),
-                "p2p_heartbeat_fresh_tid_activated_after_login": (
-                    stream.p2p_heartbeat_fresh_tid_activated_after_login
-                ),
-                "p2p_heartbeat_pre_auth_reused_tid_count": (
-                    stream.p2p_heartbeat_pre_auth_reused_tid_count
-                ),
+                "p2p_heartbeat_started_after_handoff": stream.p2p_heartbeat_started_after_handoff,
+                "p2p_heartbeat_first_delay_seconds": stream.p2p_heartbeat_first_delay_seconds,
+                "p2p_heartbeat_pre_cmd13_count": stream.p2p_heartbeat_pre_cmd13_count,
+                "p2p_heartbeat_background_task_active": stream.p2p_heartbeat_background_task_active,
+                "p2p_heartbeat_fresh_tid_enabled": stream.p2p_heartbeat_fresh_tid_enabled,
+                "p2p_heartbeat_unique_tid_count": stream.p2p_heartbeat_unique_tid_count,
+                "p2p_heartbeat_fresh_tid_activated_after_login": stream.p2p_heartbeat_fresh_tid_activated_after_login,
+                "p2p_heartbeat_pre_auth_reused_tid_count": stream.p2p_heartbeat_pre_auth_reused_tid_count,
                 "proactive_cmd234_count": stream.proactive_cmd234_count,
                 "cmd8_full_high": stream.cmd8_full_high,
                 "cmd8_handle_used": stream.cmd8_handle_used,
@@ -298,9 +265,7 @@ async def async_get_config_entry_diagnostics(
                 "single_lease_handoff": stream.single_lease_handoff,
                 "single_lease_socket_reused": stream.single_lease_socket_reused,
                 "single_lease_ids_reused": stream.single_lease_ids_reused,
-                "single_lease_transaction_id_reused": (
-                    stream.single_lease_transaction_id_reused
-                ),
+                "single_lease_transaction_id_reused": stream.single_lease_transaction_id_reused,
                 "secondary_connect_sent": stream.secondary_connect_sent,
                 "cmd13_udp_seq": stream.cmd13_udp_seq,
                 "cmd13_udp_ack_received": stream.cmd13_udp_ack_received,
@@ -321,52 +286,24 @@ async def async_get_config_entry_diagnostics(
                 "udp_last_contiguous_seq": stream.udp_last_contiguous_seq,
                 "udp_max_ack_delay_ms": stream.udp_max_ack_delay_ms,
                 "udp_seq_at_remote_disconnect": stream.udp_seq_at_remote_disconnect,
-                "udp_snapshot_from_local_protocol": (
-                    stream.udp_snapshot_from_local_protocol
-                ),
-                "udp_network_bc_datagrams_received": (
-                    stream.udp_network_bc_datagrams_received
-                ),
+                "udp_snapshot_from_local_protocol": stream.udp_snapshot_from_local_protocol,
+                "udp_network_bc_datagrams_received": stream.udp_network_bc_datagrams_received,
                 "udp_highest_network_seq_seen": stream.udp_highest_network_seq_seen,
-                "udp_recovered_missing_packet_count": (
-                    stream.udp_recovered_missing_packet_count
-                ),
-                "udp_unresolved_missing_packet_count_at_disconnect": (
-                    stream.udp_unresolved_missing_packet_count_at_disconnect
-                ),
-                "udp_buffered_out_of_order_at_disconnect": (
-                    stream.udp_buffered_out_of_order_at_disconnect
-                ),
-                "udp_highest_buffered_seq_at_disconnect": (
-                    stream.udp_highest_buffered_seq_at_disconnect
-                ),
-                "udp_expected_next_seq_at_disconnect": (
-                    stream.udp_expected_next_seq_at_disconnect
-                ),
+                "udp_recovered_missing_packet_count": stream.udp_recovered_missing_packet_count,
+                "udp_unresolved_missing_packet_count_at_disconnect": stream.udp_unresolved_missing_packet_count_at_disconnect,
+                "udp_buffered_out_of_order_at_disconnect": stream.udp_buffered_out_of_order_at_disconnect,
+                "udp_highest_buffered_seq_at_disconnect": stream.udp_highest_buffered_seq_at_disconnect,
+                "udp_expected_next_seq_at_disconnect": stream.udp_expected_next_seq_at_disconnect,
                 "udp_max_gap_recovery_ms": stream.udp_max_gap_recovery_ms,
                 "udp_periodic_ack_started": stream.udp_periodic_ack_started,
-                "udp_periodic_ack_interval_ms": (
-                    stream.udp_periodic_ack_interval_ms
-                ),
+                "udp_periodic_ack_interval_ms": stream.udp_periodic_ack_interval_ms,
                 "udp_periodic_ack_count": stream.udp_periodic_ack_count,
-                "udp_periodic_ack_gap_count": (
-                    stream.udp_periodic_ack_gap_count
-                ),
-                "udp_ack_inclusive_highest_enabled": (
-                    stream.udp_ack_inclusive_highest_enabled
-                ),
-                "udp_ack_inclusive_highest_count": (
-                    stream.udp_ack_inclusive_highest_count
-                ),
-                "udp_current_missing_packet_count_at_disconnect": (
-                    stream.udp_current_missing_packet_count_at_disconnect
-                ),
-                "udp_periodic_only_ack_enabled": (
-                    stream.udp_periodic_only_ack_enabled
-                ),
-                "udp_immediate_ack_suppressed_count": (
-                    stream.udp_immediate_ack_suppressed_count
-                ),
+                "udp_periodic_ack_gap_count": stream.udp_periodic_ack_gap_count,
+                "udp_ack_inclusive_highest_enabled": stream.udp_ack_inclusive_highest_enabled,
+                "udp_ack_inclusive_highest_count": stream.udp_ack_inclusive_highest_count,
+                "udp_current_missing_packet_count_at_disconnect": stream.udp_current_missing_packet_count_at_disconnect,
+                "udp_periodic_only_ack_enabled": stream.udp_periodic_only_ack_enabled,
+                "udp_immediate_ack_suppressed_count": stream.udp_immediate_ack_suppressed_count,
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -401,13 +338,80 @@ async def async_get_config_entry_diagnostics(
                 "xml_binary_data_present": stream.xml_binary_data_present,
                 "sample_limit_bytes": stream.sample_limit_bytes,
                 "sample_limit_frames": stream.sample_limit_frames,
-                "sample_limit_reached": stream.termination_reason
-                in {"byte_limit", "frame_limit"},
+                "sample_limit_reached": stream.termination_reason in {"byte_limit", "frame_limit"},
                 "raw_values_exposed": False,
             },
             "media_payload_observed": stream.media_frames > 0,
             "full_media_download_attempted": stream.file_write_attempted,
             "cmd8_attempted": stream.cmd8_attempted,
+        },
+        "live_stream_probe": {
+            "experimental": True,
+            "manual_only": True,
+            "background_streaming_enabled": False,
+            "bounded_duration_seconds": 10.0,
+            "attempted": live.attempted,
+            "success": live.success,
+            "failure_stage": live.failure_stage or None,
+            "failure_type": live.failure_type or None,
+            "response_code": live.response_code,
+            "stream_kind": live.stream_kind,
+            "start_request": {
+                "header_channel_id": live.start_request_header_channel_id,
+                "stream_type": live.start_request_stream_type,
+                "msg_num": live.start_request_msg_num,
+                "message_class": _hex_class(live.start_request_message_class),
+                "body_length": live.start_request_body_length,
+                "payload_offset": live.start_request_payload_offset,
+                "preview_handle": live.start_request_preview_handle,
+                "preview_stream_type": live.start_request_preview_stream_type,
+            },
+            "stop_request": {
+                "header_channel_id": live.stop_request_header_channel_id,
+                "stream_type": live.stop_request_stream_type,
+                "msg_num": live.stop_request_msg_num,
+                "message_class": _hex_class(live.stop_request_message_class),
+                "body_length": live.stop_request_body_length,
+                "payload_offset": live.stop_request_payload_offset,
+                "preview_handle": live.stop_request_preview_handle,
+            },
+            "start_attempted": live.start_attempted,
+            "start_response_code": live.start_response_code,
+            "start_accepted": live.start_accepted,
+            "first_cmd3_delay_ms": live.first_cmd3_delay_ms,
+            "cmd3_frames": live.cmd3_frames,
+            "body_frames": live.body_frames,
+            "total_body_bytes": live.total_body_bytes,
+            "bcmedia_observed": live.bcmedia_observed,
+            "bcmedia_info_frames": live.bcmedia_info_frames,
+            "video_frames": live.video_frames,
+            "iframe_frames": live.iframe_frames,
+            "pframe_frames": live.pframe_frames,
+            "h264_frames": live.h264_frames,
+            "h265_frames": live.h265_frames,
+            "unknown_body_frames": live.unknown_body_frames,
+            "stop_attempted": live.stop_attempted,
+            "stop_response_code": live.stop_response_code,
+            "stop_accepted": live.stop_accepted,
+            "remote_disconnect_observed": live.remote_disconnect_observed,
+            "connection_lost_exception_present": live.connection_lost_exception_present,
+            "p2p_heartbeat_count": live.p2p_heartbeat_count,
+            "udp_network_bc_datagrams_received": live.udp_network_bc_datagrams_received,
+            "udp_seq_gap_events": live.udp_seq_gap_events,
+            "udp_recovered_missing_packet_count": live.udp_recovered_missing_packet_count,
+            "udp_unresolved_missing_packet_count_at_disconnect": live.udp_unresolved_missing_packet_count_at_disconnect,
+            "elapsed_seconds": live.elapsed_seconds,
+            "termination_reason": live.termination_reason or None,
+            "uid_resolve": {
+                "timeout_seconds": live.uid_resolve_timeout_seconds,
+                "resend_interval_seconds": live.uid_resolve_resend_interval_seconds,
+                "send_rounds": live.uid_resolve_send_rounds,
+                "datagrams_sent": live.uid_resolve_datagrams_sent,
+                "elapsed_ms": live.uid_resolve_elapsed_ms,
+                "succeeded": live.uid_resolve_succeeded,
+                "network_identifiers_exposed": False,
+            },
+            "raw_values_exposed": False,
         },
         "recording_worker": {
             "configured": worker is not None,
@@ -419,80 +423,71 @@ async def async_get_config_entry_diagnostics(
             "attempts": worker.state.attempts if worker else 0,
             "retries": worker.state.retries if worker else 0,
             "completed": worker.state.completed if worker else 0,
-            "deduplicated_recordings": (
-                worker.state.deduplicated_recordings if worker else 0
-            ),
+            "deduplicated_recordings": worker.state.deduplicated_recordings if worker else 0,
             "recording_dedupe_policy": "persistent_candidate_fingerprint_before_cmd13",
             "last_duplicate_event_time": (
                 worker.state.last_duplicate_event_time.isoformat()
-                if worker and worker.state.last_duplicate_event_time else None
+                if worker and worker.state.last_duplicate_event_time
+                else None
             ),
             "last_duplicate_recording_fingerprint_present": bool(
                 worker and worker.state.last_duplicate_recording_fingerprint_present
             ),
             "deferred_count": worker.state.deferred_count if worker else 0,
-            "deferred_rearmed_count": (
-                worker.state.deferred_rearmed_count if worker else 0
-            ),
+            "deferred_rearmed_count": worker.state.deferred_rearmed_count if worker else 0,
             "retry_preemptions": worker.state.retry_preemptions if worker else 0,
             "last_preempted_event_time": (
                 worker.state.last_preempted_event_time.isoformat()
-                if worker and worker.state.last_preempted_event_time else None
+                if worker and worker.state.last_preempted_event_time
+                else None
             ),
             "last_preempting_event_time": (
                 worker.state.last_preempting_event_time.isoformat()
-                if worker and worker.state.last_preempting_event_time else None
+                if worker and worker.state.last_preempting_event_time
+                else None
             ),
             "selection_policy": "newest_pending_first",
             "deferred_rearm_policy": "new_notification",
             "retry_preemption_policy": "newer_notification_before_retry",
             "last_event_time": (
                 worker.state.last_event_time.isoformat()
-                if worker and worker.state.last_event_time else None
+                if worker and worker.state.last_event_time
+                else None
             ),
             "last_attempt_time": (
                 worker.state.last_attempt_time.isoformat()
-                if worker and worker.state.last_attempt_time else None
+                if worker and worker.state.last_attempt_time
+                else None
             ),
             "last_completed_time": (
                 worker.state.last_completed_time.isoformat()
-                if worker and worker.state.last_completed_time else None
+                if worker and worker.state.last_completed_time
+                else None
             ),
             "last_failure_stage": (worker.state.last_failure_stage or None) if worker else None,
             "last_failure_type": (worker.state.last_failure_type or None) if worker else None,
             "prior_attempt": {
                 "event_time": (
                     worker.state.prior_attempt_event_time.isoformat()
-                    if worker and worker.state.prior_attempt_event_time else None
+                    if worker and worker.state.prior_attempt_event_time
+                    else None
                 ),
                 "attempt_time": (
                     worker.state.prior_attempt_time.isoformat()
-                    if worker and worker.state.prior_attempt_time else None
+                    if worker and worker.state.prior_attempt_time
+                    else None
                 ),
                 "failure_stage": (worker.state.prior_failure_stage or None) if worker else None,
                 "failure_type": (worker.state.prior_failure_type or None) if worker else None,
-                "uid_resolve_succeeded": bool(
-                    worker and worker.state.prior_uid_resolve_succeeded
-                ),
-                "uid_resolve_elapsed_ms": (
-                    worker.state.prior_uid_resolve_elapsed_ms if worker else None
-                ),
+                "uid_resolve_succeeded": bool(worker and worker.state.prior_uid_resolve_succeeded),
+                "uid_resolve_elapsed_ms": worker.state.prior_uid_resolve_elapsed_ms if worker else None,
                 "stream_termination_reason": (
-                    worker.state.prior_stream_termination_reason or None
-                    if worker else None
+                    worker.state.prior_stream_termination_reason or None if worker else None
                 ),
-                "stream_elapsed_seconds": (
-                    worker.state.prior_stream_elapsed_seconds if worker else None
-                ),
-                "stream_file_bytes": (
-                    worker.state.prior_stream_file_bytes if worker else 0
-                ),
-                "stream_expected_size": (
-                    worker.state.prior_stream_expected_size if worker else None
-                ),
-                "stream_remote_disconnect": bool(
-                    worker and worker.state.prior_stream_remote_disconnect
-                ),
+                "stream_elapsed_seconds": worker.state.prior_stream_elapsed_seconds if worker else None,
+                "stream_file_bytes": worker.state.prior_stream_file_bytes if worker else 0,
+                "stream_expected_size": worker.state.prior_stream_expected_size if worker else None,
+                "stream_remote_disconnect": bool(worker and worker.state.prior_stream_remote_disconnect),
             },
             "last_file_saved": bool(worker and worker.state.last_file_saved),
             "last_file_size": worker.state.last_file_size if worker else 0,
@@ -500,24 +495,12 @@ async def async_get_config_entry_diagnostics(
             "last_media_source_id": (worker.state.last_media_source_id or None) if worker else None,
             "last_media_content_id_present": bool(worker and worker.state.last_media_content_id_present),
             "uid_resolve": {
-                "timeout_seconds": (
-                    worker.state.last_uid_resolve_timeout_seconds if worker else 0.0
-                ),
-                "resend_interval_seconds": (
-                    worker.state.last_uid_resolve_resend_interval_seconds if worker else 0.0
-                ),
-                "send_rounds": (
-                    worker.state.last_uid_resolve_send_rounds if worker else 0
-                ),
-                "datagrams_sent": (
-                    worker.state.last_uid_resolve_datagrams_sent if worker else 0
-                ),
-                "elapsed_ms": (
-                    worker.state.last_uid_resolve_elapsed_ms if worker else None
-                ),
-                "succeeded": bool(
-                    worker and worker.state.last_uid_resolve_succeeded
-                ),
+                "timeout_seconds": worker.state.last_uid_resolve_timeout_seconds if worker else 0.0,
+                "resend_interval_seconds": worker.state.last_uid_resolve_resend_interval_seconds if worker else 0.0,
+                "send_rounds": worker.state.last_uid_resolve_send_rounds if worker else 0,
+                "datagrams_sent": worker.state.last_uid_resolve_datagrams_sent if worker else 0,
+                "elapsed_ms": worker.state.last_uid_resolve_elapsed_ms if worker else None,
+                "succeeded": bool(worker and worker.state.last_uid_resolve_succeeded),
                 "network_identifiers_exposed": False,
             },
             "raw_path_exposed": False,
