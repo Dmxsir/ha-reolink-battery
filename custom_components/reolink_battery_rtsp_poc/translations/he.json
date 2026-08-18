@@ -1,0 +1,25 @@
+{
+  "title": "Reolink Battery RTSP PoC",
+  "config": {
+    "step": {
+      "user": {
+        "title": "בחירת מקור Reolink Battery",
+        "description": "בחר את רשומת Reolink Battery הקיימת. ה־PoC ישתמש ב־UID, בפרטי ההתחברות המקומיים, בממשק ה־LAN ובנעילת הפעולות שכבר שמורים שם. הסיסמאות אינן מועתקות לרשומת ה־PoC.",
+        "data": {
+          "source_entry_id": "מצלמת Reolink Battery"
+        }
+      }
+    },
+    "abort": {
+      "no_source_entries": "לא נמצאה אינטגרציית Reolink Battery מוגדרת.",
+      "already_configured": "כבר קיימת רשומת RTSP PoC עבור המצלמה הזו."
+    }
+  },
+  "entity": {
+    "button": {
+      "probe_live_stream": {
+        "name": "בדיקת תצוגה חיה"
+      }
+    }
+  }
+}
