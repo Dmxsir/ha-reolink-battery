@@ -1,0 +1,25 @@
+{
+  "title": "Reolink Battery RTSP PoC",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select Reolink Battery source",
+        "description": "Select the existing Reolink Battery integration entry whose saved UID, local credentials, LAN interface, and operation lock will be reused. Credentials are not copied into the PoC entry.",
+        "data": {
+          "source_entry_id": "Reolink Battery camera"
+        }
+      }
+    },
+    "abort": {
+      "no_source_entries": "No configured Reolink Battery integration was found.",
+      "already_configured": "An RTSP PoC entry already exists for this camera."
+    }
+  },
+  "entity": {
+    "button": {
+      "probe_live_stream": {
+        "name": "Probe live stream"
+      }
+    }
+  }
+}
