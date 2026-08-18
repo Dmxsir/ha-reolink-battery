@@ -92,6 +92,9 @@
       "refresh_device_status": {
         "name": "רענון מצב המצלמה"
       },
+      "probe_live_stream": {
+        "name": "בדיקת תצוגה חיה"
+      },
       "find_pending_recording": {
         "name": "מצא הקלטה לאירוע הממתין"
       },
