@@ -92,6 +92,9 @@
       "refresh_device_status": {
         "name": "Refresh device status"
       },
+      "probe_live_stream": {
+        "name": "Probe live stream"
+      },
       "find_pending_recording": {
         "name": "Find pending recording"
       },
