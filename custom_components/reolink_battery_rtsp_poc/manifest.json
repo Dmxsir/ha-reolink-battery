@@ -1,0 +1,20 @@
+{
+  "domain": "reolink_battery_rtsp_poc",
+  "name": "Reolink Battery RTSP PoC",
+  "codeowners": [
+    "@Dmxsir"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/Dmxsir/ha-reolink-battery",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/Dmxsir/ha-reolink-battery/issues",
+  "loggers": [
+    "reolink_aio"
+  ],
+  "requirements": [
+    "pycryptodomex==3.23.0",
+    "reolink-aio==0.21.8"
+  ],
+  "version": "0.0.1"
+}
