@@ -98,6 +98,11 @@
       "prepare_pending_recording_download": {
         "name": "Prepare pending recording download"
       }
+    },
+    "camera": {
+      "live_view": {
+        "name": "Live view"
+      }
     }
   }
 }
