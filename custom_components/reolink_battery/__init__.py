@@ -45,11 +45,19 @@ from .device_status import (
 )
 
 if TYPE_CHECKING:
+    from .go2rtc_bridge import Go2RtcBridgeState
+    from .live_http import ReolinkBatteryLiveHub
     from .notification_bridge import NotificationBridge
     from .recording_worker import RecordingWorker
 
-PLATFORMS = (Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON)
+PLATFORMS = (
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.CAMERA,
+)
 STORAGE_SENSOR_KEYS = ("storage_total", "storage_used", "storage_free")
+_LIVE_HTTP_REGISTERED = "live_http_registered"
 
 
 class LocalStatusRefreshError(RuntimeError):
@@ -70,6 +78,8 @@ class ReolinkBatteryRuntime:
     local_operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     notification_bridge: NotificationBridge | None = None
     recording_worker: RecordingWorker | None = None
+    live_hub: ReolinkBatteryLiveHub | None = None
+    go2rtc_bridge: Go2RtcBridgeState | None = None
 
 
 ReolinkBatteryConfigEntry = ConfigEntry[ReolinkBatteryRuntime]
@@ -78,7 +88,7 @@ ReolinkBatteryConfigEntry = ConfigEntry[ReolinkBatteryRuntime]
 async def async_setup_entry(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> bool:
-    """Set up cloud polling, queue and optional HA Companion notification bridge."""
+    """Set up cloud polling, recording and battery-safe on-demand Live View."""
     cloud = ReolinkCloudClient(async_get_clientsession(hass))
 
     def update_tokens(tokens: CloudTokens) -> None:
@@ -151,6 +161,24 @@ async def async_setup_entry(
             initial_event=initial_notification_event,
         )
         runtime.notification_bridge.start()
+
+    # Live View is completely on-demand. Registering the HTTP endpoints and the
+    # go2rtc source does not open a camera connection; the first media consumer
+    # wakes the Argus and the final disconnect closes it.
+    from .go2rtc_bridge import async_ensure_go2rtc_bridge
+    from .live_http import (
+        ReolinkBatteryAacView,
+        ReolinkBatteryH264View,
+        ReolinkBatteryLiveHub,
+    )
+
+    runtime.live_hub = ReolinkBatteryLiveHub(hass, entry)
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if not domain_data.get(_LIVE_HTTP_REGISTERED):
+        hass.http.register_view(ReolinkBatteryH264View())
+        hass.http.register_view(ReolinkBatteryAacView())
+        domain_data[_LIVE_HTTP_REGISTERED] = True
+    runtime.go2rtc_bridge = await async_ensure_go2rtc_bridge(hass, entry)
 
     _migrate_storage_units(hass, entry)
     _update_device_registry(hass, entry, local_state)
@@ -273,9 +301,11 @@ async def async_refresh_local_status(
 async def async_unload_entry(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> bool:
-    """Persist the queue, stop listeners and stop polling."""
+    """Persist the queue, stop listeners, Live View and polling."""
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
+    if entry.runtime_data.live_hub is not None:
+        await entry.runtime_data.live_hub.async_stop()
     if entry.runtime_data.notification_bridge is not None:
         entry.runtime_data.notification_bridge.stop()
     if entry.runtime_data.recording_worker is not None:
