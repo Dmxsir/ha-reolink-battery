@@ -1,0 +1,137 @@
+name: Bug report
+
+description: Report a problem with Reolink Battery and include Home Assistant diagnostics.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem with Reolink Battery.
+
+        Please fill in the fields below and attach or paste the **Home Assistant diagnostics** for this integration. The integration diagnostics are designed to redact credentials, tokens, network addresses, filenames, and session keys.
+
+        **Do not paste passwords, account tokens, camera credentials, or unredacted private logs.**
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Which part of the integration is affected?
+      options:
+        - Live View / camera stream
+        - Live View audio
+        - Camera connection / wake / authentication
+        - Motion notification bridge
+        - Event detection / queue
+        - Recording lookup
+        - Recording download / saved recording
+        - Battery / Wi-Fi / storage sensors
+        - Configuration / setup
+        - go2rtc bridge
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Example: 2026.8.2
+      placeholder: 2026.x.x
+    validations:
+      required: true
+
+  - type: input
+    id: integration_version
+    attributes:
+      label: Reolink Battery integration version
+      description: Find this in HACS or the integration manifest.
+      placeholder: 1.3.0
+    validations:
+      required: true
+
+  - type: input
+    id: camera_model
+    attributes:
+      label: Camera model
+      description: Example: Argus 2E. This is also present in diagnostics, but adding it here makes issue triage easier.
+      placeholder: Argus 2E
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the problem clearly. Include when it started and whether it is reproducible.
+      placeholder: Tell us what you observed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: List the shortest sequence that reproduces the problem.
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. Wait ...
+        4. Error appears ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Reolink Battery diagnostics
+      description: |
+        In Home Assistant open Settings → Devices & services → Reolink Battery → the integration entry → Download diagnostics.
+        Paste the JSON below or drag the downloaded diagnostics file into this field.
+
+        The diagnostics contain useful triage data such as camera model/auth path, event and notification-bridge state, recording probe/download state, heartbeat and UDP reliability telemetry. The integration intentionally redacts credentials and other secrets.
+      render: json
+      placeholder: Paste the diagnostics JSON here, or drag the diagnostics file into this field.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Home Assistant log entries
+      description: |
+        Paste only log lines related to reolink_battery / reolink_aio around the failure.
+        Remove passwords, tokens, public URLs, IP addresses, or any other private data before posting.
+      render: text
+      placeholder: Optional relevant log entries
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, go2rtc info, timing details, or anything else that may help.
+      placeholder: Optional
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I am using the latest available Reolink Battery version in HACS.
+          required: true
+        - label: I restarted Home Assistant after updating the integration.
+          required: true
+        - label: I have not included passwords, tokens, camera credentials, or other secrets in this issue.
+          required: true
+        - label: I searched existing issues and did not find the same problem already reported.
+          required: true
