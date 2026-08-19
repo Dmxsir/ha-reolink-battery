@@ -1,6 +1,6 @@
 name: Bug report
 
-description: Report a problem with Reolink Battery and include Home Assistant diagnostics.
+description: Report a problem with Reolink Battery and attach Home Assistant diagnostics.
 title: "[Bug]: "
 labels:
   - bug
@@ -10,7 +10,7 @@ body:
       value: |
         Thanks for reporting a problem with Reolink Battery.
 
-        Please fill in the fields below and attach or paste the **Home Assistant diagnostics** for this integration. The integration diagnostics are designed to redact credentials, tokens, network addresses, filenames, and session keys.
+        Please fill in the fields below and **attach the downloaded Home Assistant diagnostics file** for this integration. The integration diagnostics are designed to redact credentials, tokens, network addresses, filenames, and session keys.
 
         **Do not paste passwords, account tokens, camera credentials, or unredacted private logs.**
 
@@ -48,7 +48,7 @@ body:
     attributes:
       label: Reolink Battery integration version
       description: Find this in HACS or the integration manifest.
-      placeholder: 1.3.0
+      placeholder: 1.3.x
     validations:
       required: true
 
@@ -94,14 +94,14 @@ body:
   - type: textarea
     id: diagnostics
     attributes:
-      label: Reolink Battery diagnostics
+      label: Attach Reolink Battery diagnostics
       description: |
         In Home Assistant open Settings → Devices & services → Reolink Battery → the integration entry → Download diagnostics.
-        Paste the JSON below or drag the downloaded diagnostics file into this field.
 
-        The diagnostics contain useful triage data such as camera model/auth path, event and notification-bridge state, recording probe/download state, heartbeat and UDP reliability telemetry. The integration intentionally redacts credentials and other secrets.
-      render: json
-      placeholder: Paste the diagnostics JSON here, or drag the diagnostics file into this field.
+        **Drag the downloaded diagnostics file into this field.** GitHub will insert an attachment link. Please attach the file rather than pasting hundreds of lines of JSON into the issue.
+
+        Diagnostics include camera/auth metadata, notification and event state, recording-worker state, Live View/go2rtc state, and protocol telemetry while intentionally excluding credentials and other secrets.
+      placeholder: Drag the downloaded diagnostics file here. GitHub will insert a link to the attachment.
     validations:
       required: true
 
@@ -130,6 +130,8 @@ body:
         - label: I am using the latest available Reolink Battery version in HACS.
           required: true
         - label: I restarted Home Assistant after updating the integration.
+          required: true
+        - label: I attached the Reolink Battery diagnostics file generated after reproducing the problem.
           required: true
         - label: I have not included passwords, tokens, camera credentials, or other secrets in this issue.
           required: true
