@@ -12,13 +12,11 @@ body:
 
         Please reproduce the problem first, then download the **Home Assistant diagnostics** for this integration while the problem is still represented in the runtime state.
 
-        The diagnostics contain a small section prepared specifically for GitHub Issues. Copy only the section between:
+        In the downloaded JSON, search for:
 
-        `### COPY FROM HERE FOR GITHUB ISSUE ###`
+        `### COPY THIS BLOCK TO GITHUB ISSUE ###`
 
-        and:
-
-        `### END COPY FOR GITHUB ISSUE ###`
+        Copy that complete JSON block and paste it into the Diagnostics field below. There is no need to upload or paste the full diagnostics file.
 
         **Do not paste passwords, account tokens, camera credentials, or unredacted private logs.**
 
@@ -146,17 +144,13 @@ body:
       description: |
         In Home Assistant open Settings → Devices & services → Reolink Battery → the integration entry → Download diagnostics.
 
-        Open the downloaded JSON file and find:
+        Open the downloaded JSON and search for:
 
-        `### COPY FROM HERE FOR GITHUB ISSUE ###`
+        `### COPY THIS BLOCK TO GITHUB ISSUE ###`
 
-        Copy the complete block through:
-
-        `### END COPY FOR GITHUB ISSUE ###`
-
-        Paste only that block below. There is no need to upload or paste the full diagnostics file.
+        Copy that marker together with its complete JSON object and paste it below. Do not paste the rest of the diagnostics file.
       render: json
-      placeholder: Paste the marked diagnostics block here.
+      placeholder: Paste the marked GitHub Issue diagnostics block here.
     validations:
       required: true
 
