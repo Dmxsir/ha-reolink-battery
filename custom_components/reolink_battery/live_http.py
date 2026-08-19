@@ -29,7 +29,8 @@ HTTP_AAC_PATH = "/api/reolink_battery/{entry_id}/main.aac"
 _MAX_VIDEO_QUEUE = 64
 _MAX_AUDIO_QUEUE = 512
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
-ISSUE_COPY_MARKER = "### COPY THIS BLOCK TO GITHUB ISSUE ###"
+ISSUE_COPY_MARKER = "### >>> COPY THIS BLOCK TO GITHUB ISSUE >>> ###"
+ISSUE_COPY_END_MARKER = "### <<< END GITHUB ISSUE BLOCK <<< ###"
 
 
 def h264_path(entry_id: str) -> str:
@@ -268,6 +269,7 @@ class ReolinkBatteryLiveHub:
         live_state = self._live_state()
         return {
             ISSUE_COPY_MARKER: self._issue_report_snapshot(live_state),
+            ISSUE_COPY_END_MARKER: None,
             **live_state,
             "raw_media_exposed": False,
             "network_identifiers_exposed": False,
