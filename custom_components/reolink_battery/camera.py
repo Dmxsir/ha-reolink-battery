@@ -1,4 +1,4 @@
-"""Battery-safe camera open/authenticate/close validation."""
+"""Battery-safe camera validation and on-demand Live View entity."""
 
 from __future__ import annotations
 
@@ -9,10 +9,22 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.helpers.entity import DeviceInfo
 from reolink_aio.api import Host
 from reolink_aio.enums import ConnectionEnum
 from reolink_aio.exceptions import ReolinkError
 
+from .const import (
+    CONF_DEVICE_NAME,
+    CONF_DEVICE_PASSWORD,
+    CONF_DEVICE_USERNAME,
+    CONF_INTERFACE,
+    CONF_MODEL,
+    CONF_UID,
+    DOMAIN,
+    MANUFACTURER,
+)
 from .device_status import (
     BatteryState,
     LocalState,
@@ -161,8 +173,6 @@ async def async_validate_legacy_device(
         lease.close()
         lease = None
         auth_started = time.monotonic()
-        # Argus 2E omits analogChnNum; Phase 2 proved login with this metadata
-        # parsing path disabled. No HTTP discovery is required.
         failure_stage = "AUTH_ERROR"
         host.baichuan._first_login = False
         await host.baichuan.login()
@@ -194,3 +204,63 @@ async def async_validate_legacy_device(
                 if lease is not None:
                     lease.close()
                 password = ""
+
+
+async def async_setup_entry(hass, entry, async_add_entities) -> None:
+    """Set up the native Home Assistant Live View camera entity."""
+    async_add_entities((ReolinkBatteryLiveCamera(entry),))
+
+
+class ReolinkBatteryLiveCamera(Camera):
+    """Expose battery-safe go2rtc Live View without background camera polling."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "live_view"
+    _attr_supported_features = CameraEntityFeature.STREAM
+
+    def __init__(self, entry) -> None:
+        super().__init__()
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_live_view"
+
+    @property
+    def available(self) -> bool:
+        runtime = self._entry.runtime_data
+        bridge = getattr(runtime, "go2rtc_bridge", None)
+        return bool(
+            runtime is not None
+            and bridge is not None
+            and bridge.rtsp_url
+            and self._entry.data.get(CONF_DEVICE_USERNAME)
+            and self._entry.data.get(CONF_DEVICE_PASSWORD)
+            and self._entry.data.get(CONF_INTERFACE)
+        )
+
+    @property
+    def is_streaming(self) -> bool:
+        runtime = self._entry.runtime_data
+        hub = getattr(runtime, "live_hub", None)
+        return bool(hub is not None and hub.is_active)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.data[CONF_UID])},
+            manufacturer=MANUFACTURER,
+            model=self._entry.data.get(CONF_MODEL) or "Battery camera",
+            name=self._entry.data.get(CONF_DEVICE_NAME) or "Reolink battery camera",
+        )
+
+    async def stream_source(self) -> str | None:
+        """Return the on-demand go2rtc RTSP source."""
+        runtime = self._entry.runtime_data
+        bridge = getattr(runtime, "go2rtc_bridge", None)
+        return bridge.rtsp_url if bridge is not None else None
+
+    async def async_camera_image(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> bytes | None:
+        """Never wake the battery camera merely to refresh a dashboard still."""
+        return None
