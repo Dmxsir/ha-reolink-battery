@@ -12,17 +12,9 @@ body:
 
         Please reproduce the problem first, then download the **Home Assistant diagnostics** for this integration while the problem is still represented in the runtime state.
 
-        In the downloaded JSON, search for:
+        The Reolink Battery diagnostics are designed to exclude passwords, account tokens, camera credentials, network addresses, recording filenames, session keys, and raw media.
 
-        `### >>> COPY THIS BLOCK TO GITHUB ISSUE >>> ###`
-
-        Copy everything in that JSON object until you reach:
-
-        `### <<< END GITHUB ISSUE BLOCK <<< ###`
-
-        Paste only that marked block into the Diagnostics field below. There is no need to upload or paste the full diagnostics file.
-
-        **Do not paste passwords, account tokens, camera credentials, or unredacted private logs.**
+        **Attach the complete downloaded diagnostics JSON file below.** The full file gives us more context and avoids missing useful information during troubleshooting.
 
   - type: dropdown
     id: area
@@ -32,6 +24,20 @@ body:
       options:
         - Live Feed / video / audio
         - Motion notification / recording download
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics for issue
+      description: |
+        In Home Assistant open Settings → Devices & services → Reolink Battery → the integration entry → Download diagnostics.
+
+        Reproduce the problem first, then **drag the complete downloaded diagnostics JSON file into this field**. GitHub will insert an attachment link.
+
+        For recording problems, allow the normal recording-finalization/download workflow enough time to complete before taking diagnostics. If the worker appears stuck, take diagnostics while it is stuck.
+      placeholder: Drag the complete Reolink Battery diagnostics JSON file here.
     validations:
       required: true
 
@@ -55,37 +61,6 @@ body:
         - Not sure
     validations:
       required: true
-
-  - type: input
-    id: ha_version
-    attributes:
-      label: Home Assistant version
-      placeholder: 2026.x.x
-    validations:
-      required: true
-
-  - type: input
-    id: integration_version
-    attributes:
-      label: Reolink Battery integration version
-      placeholder: 1.3.x
-    validations:
-      required: true
-
-  - type: input
-    id: camera_model
-    attributes:
-      label: Camera model
-      placeholder: Argus 2E
-    validations:
-      required: true
-
-  - type: input
-    id: camera_firmware
-    attributes:
-      label: Camera firmware version
-      description: Optional, but useful for device-specific problems.
-      placeholder: Optional
 
   - type: dropdown
     id: official_app
@@ -115,50 +90,8 @@ body:
     id: problem
     attributes:
       label: What happened?
-      description: Describe the observed result. For recording issues, include whether the notification arrived and approximately how long you waited.
-      placeholder: Tell us exactly what you observed.
-    validations:
-      required: true
-
-  - type: textarea
-    id: reproduce
-    attributes:
-      label: Steps to reproduce
-      description: List the shortest sequence that reproduces the problem.
-      placeholder: |
-        1. Trigger motion / open Live Feed
-        2. Wait ...
-        3. Observe ...
-        4. Download diagnostics ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected behavior
-      placeholder: What did you expect to happen?
-    validations:
-      required: true
-
-  - type: textarea
-    id: diagnostics
-    attributes:
-      label: Diagnostics for issue
-      description: |
-        In Home Assistant open Settings → Devices & services → Reolink Battery → the integration entry → Download diagnostics.
-
-        Open the downloaded JSON and search for:
-
-        `### >>> COPY THIS BLOCK TO GITHUB ISSUE >>> ###`
-
-        Copy that JSON object until the next marker:
-
-        `### <<< END GITHUB ISSUE BLOCK <<< ###`
-
-        Paste only the marked block below. Do not paste the rest of the diagnostics file.
-      render: json
-      placeholder: Paste the marked GitHub Issue diagnostics block here.
+      description: Describe what you observed. For recording issues, include whether the notification arrived, whether the recording eventually appeared, and approximately how long you waited.
+      placeholder: Tell us exactly what happened.
     validations:
       required: true
 
@@ -190,9 +123,9 @@ body:
           required: true
         - label: I reproduced the problem before downloading diagnostics.
           required: true
-        - label: I pasted only the marked GitHub Issue diagnostics block, not the full diagnostics file.
+        - label: I attached the complete Reolink Battery diagnostics JSON file.
           required: true
-        - label: I have not included passwords, tokens, camera credentials, or other secrets.
+        - label: I have not included passwords, tokens, camera credentials, or other secrets in logs or additional text.
           required: true
         - label: I searched existing issues and did not find the same problem already reported.
           required: true
