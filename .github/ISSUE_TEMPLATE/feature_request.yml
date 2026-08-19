@@ -1,0 +1,73 @@
+name: Feature request
+
+description: Suggest an improvement or new capability for Reolink Battery.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Please describe the use case first, then the proposed behavior.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Live View / camera stream
+        - Audio / two-way audio
+        - Motion / notifications
+        - Events
+        - Recordings
+        - Sensors / device status
+        - Configuration
+        - go2rtc integration
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What problem or workflow would this feature improve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe what you would like the integration to do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional workarounds or alternative approaches you have tried.
+
+  - type: input
+    id: camera_model
+    attributes:
+      label: Camera model
+      description: Optional, but useful when the request may be device-specific.
+      placeholder: Argus 2E
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, protocol references, logs, or links that help explain the request.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and did not find the same request already open.
+          required: true
+        - label: I have not included passwords, tokens, camera credentials, or other secrets.
+          required: true
