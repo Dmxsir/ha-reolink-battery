@@ -1,6 +1,6 @@
 name: Bug report
 
-description: Report a problem with Reolink Battery and attach Home Assistant diagnostics.
+description: Report a Live Feed or motion/recording problem with Reolink Battery.
 title: "[Bug]: "
 labels:
   - bug
@@ -10,11 +10,15 @@ body:
       value: |
         Thanks for reporting a problem with Reolink Battery.
 
-        Please reproduce the problem once, then download and attach the **Home Assistant diagnostics** for this integration while the problem is still represented in the runtime state.
+        Please reproduce the problem first, then download the **Home Assistant diagnostics** for this integration while the problem is still represented in the runtime state.
 
-        For recording issues, remember that the integration intentionally waits for the camera to finish/finalize the recording before downloading it. If the problem is simply "recording did not arrive", wait long enough for the expected workflow to complete before taking diagnostics. If the worker appears stuck, capture diagnostics while it is stuck.
+        The diagnostics contain a small section prepared specifically for GitHub Issues. Copy only the section between:
 
-        The integration diagnostics are designed to redact credentials, tokens, network addresses, filenames, session keys, and raw media.
+        `### COPY FROM HERE FOR GITHUB ISSUE ###`
+
+        and:
+
+        `### END COPY FOR GITHUB ISSUE ###`
 
         **Do not paste passwords, account tokens, camera credentials, or unredacted private logs.**
 
@@ -22,19 +26,10 @@ body:
     id: area
     attributes:
       label: Affected area
-      description: Which part of the integration is affected?
+      description: Which of the two main integration paths is affected?
       options:
-        - Live View / camera stream
-        - Live View audio
-        - Camera connection / wake / authentication
-        - Motion notification bridge
-        - Event detection / queue
-        - Recording lookup
-        - Recording download / saved recording
-        - Battery / Wi-Fi / storage sensors
-        - Configuration / setup
-        - go2rtc bridge
-        - Other
+        - Live Feed / video / audio
+        - Motion notification / recording download
     validations:
       required: true
 
@@ -42,7 +37,7 @@ body:
     id: occurred_at
     attributes:
       label: Approximate time of the problem
-      description: Include date, local time, and timezone. This lets us correlate your report with timestamps in diagnostics.
+      description: Include date, local time, and timezone so timestamps can be correlated with diagnostics.
       placeholder: "2026-08-19 15:05 Asia/Jerusalem"
     validations:
       required: true
@@ -63,7 +58,6 @@ body:
     id: ha_version
     attributes:
       label: Home Assistant version
-      description: Also included in diagnostics, but useful for quickly scanning issues.
       placeholder: 2026.x.x
     validations:
       required: true
@@ -72,7 +66,6 @@ body:
     id: integration_version
     attributes:
       label: Reolink Battery integration version
-      description: Also included in diagnostics. Find it in HACS or the integration manifest.
       placeholder: 1.3.x
     validations:
       required: true
@@ -81,7 +74,6 @@ body:
     id: camera_model
     attributes:
       label: Camera model
-      description: Also included in diagnostics, but useful for quickly identifying device-specific reports.
       placeholder: Argus 2E
     validations:
       required: true
@@ -90,27 +82,25 @@ body:
     id: camera_firmware
     attributes:
       label: Camera firmware version
-      description: Optional. Add it when known, especially for connection, Live View, audio, or recording issues.
+      description: Optional, but useful for device-specific problems.
       placeholder: Optional
 
   - type: dropdown
     id: official_app
     attributes:
       label: Did the official Reolink app work at the same time?
-      description: Test the same camera/function in the Reolink app when practical.
       options:
         - "Yes"
         - "No"
         - Not tested
-        - Not applicable
     validations:
       required: true
 
   - type: dropdown
     id: phone_notification
     attributes:
-      label: For motion/recording problems, did the phone receive the Reolink notification?
-      description: Select Not applicable for unrelated problems.
+      label: Did the phone receive the Reolink motion notification?
+      description: Select Not applicable for Live Feed problems.
       options:
         - "Yes"
         - "No"
@@ -123,7 +113,7 @@ body:
     id: problem
     attributes:
       label: What happened?
-      description: Describe the observed result. For recording issues, say whether the notification arrived, whether a recording eventually appeared, and approximately how long you waited.
+      description: Describe the observed result. For recording issues, include whether the notification arrived and approximately how long you waited.
       placeholder: Tell us exactly what you observed.
     validations:
       required: true
@@ -134,7 +124,7 @@ body:
       label: Steps to reproduce
       description: List the shortest sequence that reproduces the problem.
       placeholder: |
-        1. Trigger motion / open Live View / ...
+        1. Trigger motion / open Live Feed
         2. Wait ...
         3. Observe ...
         4. Download diagnostics ...
@@ -152,16 +142,21 @@ body:
   - type: textarea
     id: diagnostics
     attributes:
-      label: Attach Reolink Battery diagnostics
+      label: Diagnostics for issue
       description: |
         In Home Assistant open Settings → Devices & services → Reolink Battery → the integration entry → Download diagnostics.
 
-        **Drag the downloaded diagnostics file into this field.** GitHub will insert an attachment link. Please attach the file rather than pasting hundreds of lines of JSON into the issue.
+        Open the downloaded JSON file and find:
 
-        Take diagnostics **after reproducing the problem** and, when possible, after the workflow has reached the failed/stuck state you are reporting.
+        `### COPY FROM HERE FOR GITHUB ISSUE ###`
 
-        Diagnostics include Home Assistant and integration versions, camera/auth metadata, notification and event state, recording-worker state, Live View/go2rtc state, and secret-safe protocol telemetry.
-      placeholder: Drag the downloaded diagnostics file here. GitHub will insert a link to the attachment.
+        Copy the complete block through:
+
+        `### END COPY FOR GITHUB ISSUE ###`
+
+        Paste only that block below. There is no need to upload or paste the full diagnostics file.
+      render: json
+      placeholder: Paste the marked diagnostics block here.
     validations:
       required: true
 
@@ -170,8 +165,8 @@ body:
     attributes:
       label: Relevant Home Assistant log entries
       description: |
-        Paste only log lines related to reolink_battery / reolink_aio around the failure.
-        Remove passwords, tokens, public URLs, IP addresses, or any other private data before posting.
+        Optional. Paste only log lines related to reolink_battery / reolink_aio around the failure.
+        Remove passwords, tokens, public URLs, IP addresses, or other private data before posting.
       render: text
       placeholder: Optional relevant log entries
 
@@ -179,7 +174,7 @@ body:
     id: additional
     attributes:
       label: Additional context
-      description: Screenshots, go2rtc info, timing details, or anything else that may help.
+      description: Screenshots, timing details, or anything else that may help.
       placeholder: Optional
 
   - type: checkboxes
@@ -191,11 +186,11 @@ body:
           required: true
         - label: I restarted Home Assistant after updating the integration.
           required: true
-        - label: I reproduced the problem before downloading the attached diagnostics.
+        - label: I reproduced the problem before downloading diagnostics.
           required: true
-        - label: I attached the Reolink Battery diagnostics file and did not paste the full JSON into the issue body.
+        - label: I pasted only the marked GitHub Issue diagnostics block, not the full diagnostics file.
           required: true
-        - label: I have not included passwords, tokens, camera credentials, or other secrets in this issue.
+        - label: I have not included passwords, tokens, camera credentials, or other secrets.
           required: true
         - label: I searched existing issues and did not find the same problem already reported.
           required: true
