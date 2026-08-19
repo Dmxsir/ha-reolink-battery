@@ -18,7 +18,7 @@ from .const import (
     CONF_UID,
     DOMAIN,
 )
-from .live_stream import async_stream_media
+from .live_stream import LiveStreamTrace, async_stream_media
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,11 +60,46 @@ class ReolinkBatteryLiveHub:
         self._audio_queues: set[asyncio.Queue[bytes | None]] = set()
         self._producer_task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event | None = None
+        self._sessions_started = 0
+        self._sessions_completed = 0
+        self._last_failure_stage: str | None = None
+        self._last_failure_type: str | None = None
+        self._last_trace: LiveStreamTrace | None = None
 
     @property
     def is_active(self) -> bool:
         task = self._producer_task
         return task is not None and not task.done()
+
+    def diagnostics_snapshot(self) -> dict[str, object]:
+        """Return only secret-safe Live View runtime telemetry."""
+        trace = self._last_trace
+        return {
+            "active": self.is_active,
+            "video_consumers": len(self._video_queues),
+            "audio_consumers": len(self._audio_queues),
+            "sessions_started": self._sessions_started,
+            "sessions_completed": self._sessions_completed,
+            "last_failure_stage": self._last_failure_stage,
+            "last_failure_type": self._last_failure_type,
+            "last_session": (
+                {
+                    "start_accepted": trace.start_accepted,
+                    "start_response_code": trace.start_response_code,
+                    "stop_accepted": trace.stop_accepted,
+                    "stop_response_code": trace.stop_response_code,
+                    "h264_frames": trace.h264_frames,
+                    "aac_packets": trace.aac_packets,
+                    "p2p_heartbeat_count": trace.p2p_heartbeat_count,
+                    "media_keepalive_count": trace.media_keepalive_count,
+                    "termination_reason": trace.termination_reason or None,
+                }
+                if trace is not None
+                else None
+            ),
+            "raw_media_exposed": False,
+            "network_identifiers_exposed": False,
+        }
 
     async def subscribe(self, kind: str) -> asyncio.Queue[bytes | None]:
         maxsize = _MAX_VIDEO_QUEUE if kind == "video" else _MAX_AUDIO_QUEUE
@@ -117,12 +152,17 @@ class ReolinkBatteryLiveHub:
             CONF_INTERFACE,
         )
         if any(not self.entry.data.get(key) for key in required):
+            self._last_failure_stage = "LIVE_CONFIGURATION_INCOMPLETE"
+            self._last_failure_type = None
             await self._finish_producer()
             return
 
+        self._sessions_started += 1
+        self._last_failure_stage = None
+        self._last_failure_type = None
         try:
             async with runtime.local_operation_lock:
-                await async_stream_media(
+                self._last_trace = await async_stream_media(
                     self.entry.data[CONF_UID],
                     self.entry.data[CONF_DEVICE_USERNAME],
                     self.entry.data[CONF_DEVICE_PASSWORD],
@@ -133,8 +173,12 @@ class ReolinkBatteryLiveHub:
                 )
         except Exception as err:  # secret-safe: log type/stage only
             stage = getattr(err, "stage", type(err).__name__)
+            failure_type = getattr(err, "failure_type", "") or type(err).__name__
+            self._last_failure_stage = str(stage)
+            self._last_failure_type = str(failure_type)
             _LOGGER.debug("Live source ended at %s", stage)
         finally:
+            self._sessions_completed += 1
             await self._finish_producer()
 
     async def _finish_producer(self) -> None:
