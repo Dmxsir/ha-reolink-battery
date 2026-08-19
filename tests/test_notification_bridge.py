@@ -6,7 +6,7 @@ import importlib.util
 import sys
 import types
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -177,6 +177,73 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(listener.last_camera_mapped)
         self.assertFalse(listener.last_event_queued)
         self.assertTrue(listener.last_duplicate_rejected)
+        self.assertEqual(len(queue.pending), 1)
+
+    async def test_stale_processed_notification_repost_uses_callback_time(self):
+        source = bridge.notification_event_from_attributes(
+            REAL_NOTIFICATION, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None and source.notification_post_time is not None
+        queue = events.EventQueue()
+        self.assertTrue(queue.enqueue(source))
+        queue.remove(source.event_id)
+
+        async def ingest(event):
+            return 1 if queue.enqueue(event) else 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(), "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        observed_at = source.notification_post_time + timedelta(hours=26)
+        self.assertTrue(
+            await listener.async_process_attributes(
+                REAL_NOTIFICATION,
+                observed_at=observed_at,
+            )
+        )
+        self.assertEqual(len(queue.pending), 1)
+        promoted = queue.pending[0]
+        self.assertTrue(promoted.event_id.startswith("android-repost:"))
+        self.assertEqual(promoted.notification_post_time, observed_at)
+        self.assertEqual(promoted.alarm_time, observed_at)
+        self.assertEqual(listener.stale_repost_promoted_count, 1)
+        self.assertTrue(listener.last_stale_repost_promoted)
+        self.assertEqual(
+            listener.last_effective_event_time_source,
+            "sensor_callback_repost",
+        )
+        self.assertFalse(listener.last_duplicate_rejected)
+
+    async def test_stale_repost_debounce_suppresses_rapid_notification_update(self):
+        source = bridge.notification_event_from_attributes(
+            REAL_NOTIFICATION, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None and source.notification_post_time is not None
+        queue = events.EventQueue()
+        self.assertTrue(queue.enqueue(source))
+        queue.remove(source.event_id)
+
+        async def ingest(event):
+            return 1 if queue.enqueue(event) else 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(), "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        observed_at = source.notification_post_time + timedelta(hours=26)
+        self.assertTrue(
+            await listener.async_process_attributes(
+                REAL_NOTIFICATION,
+                observed_at=observed_at,
+            )
+        )
+        self.assertFalse(
+            await listener.async_process_attributes(
+                REAL_NOTIFICATION,
+                observed_at=observed_at + timedelta(seconds=5),
+            )
+        )
+        self.assertEqual(listener.stale_repost_promoted_count, 1)
+        self.assertEqual(listener.stale_repost_suppressed_count, 1)
         self.assertEqual(len(queue.pending), 1)
 
     async def test_non_reolink_notification_never_calls_ingest(self):
