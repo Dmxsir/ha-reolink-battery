@@ -14,9 +14,13 @@ body:
 
         In the downloaded JSON, search for:
 
-        `### COPY THIS BLOCK TO GITHUB ISSUE ###`
+        `### >>> COPY THIS BLOCK TO GITHUB ISSUE >>> ###`
 
-        Copy that complete JSON block and paste it into the Diagnostics field below. There is no need to upload or paste the full diagnostics file.
+        Copy everything in that JSON object until you reach:
+
+        `### <<< END GITHUB ISSUE BLOCK <<< ###`
+
+        Paste only that marked block into the Diagnostics field below. There is no need to upload or paste the full diagnostics file.
 
         **Do not paste passwords, account tokens, camera credentials, or unredacted private logs.**
 
@@ -146,9 +150,13 @@ body:
 
         Open the downloaded JSON and search for:
 
-        `### COPY THIS BLOCK TO GITHUB ISSUE ###`
+        `### >>> COPY THIS BLOCK TO GITHUB ISSUE >>> ###`
 
-        Copy that marker together with its complete JSON object and paste it below. Do not paste the rest of the diagnostics file.
+        Copy that JSON object until the next marker:
+
+        `### <<< END GITHUB ISSUE BLOCK <<< ###`
+
+        Paste only the marked block below. Do not paste the rest of the diagnostics file.
       render: json
       placeholder: Paste the marked GitHub Issue diagnostics block here.
     validations:
