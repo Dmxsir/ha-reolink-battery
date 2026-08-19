@@ -10,7 +10,11 @@ body:
       value: |
         Thanks for reporting a problem with Reolink Battery.
 
-        Please fill in the fields below and **attach the downloaded Home Assistant diagnostics file** for this integration. The integration diagnostics are designed to redact credentials, tokens, network addresses, filenames, and session keys.
+        Please reproduce the problem once, then download and attach the **Home Assistant diagnostics** for this integration while the problem is still represented in the runtime state.
+
+        For recording issues, remember that the integration intentionally waits for the camera to finish/finalize the recording before downloading it. If the problem is simply "recording did not arrive", wait long enough for the expected workflow to complete before taking diagnostics. If the worker appears stuck, capture diagnostics while it is stuck.
+
+        The integration diagnostics are designed to redact credentials, tokens, network addresses, filenames, session keys, and raw media.
 
         **Do not paste passwords, account tokens, camera credentials, or unredacted private logs.**
 
@@ -35,10 +39,31 @@ body:
       required: true
 
   - type: input
+    id: occurred_at
+    attributes:
+      label: Approximate time of the problem
+      description: Include date, local time, and timezone. This lets us correlate your report with timestamps in diagnostics.
+      placeholder: "2026-08-19 15:05 Asia/Jerusalem"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time
+        - Often / intermittent
+        - Happened once
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
     id: ha_version
     attributes:
       label: Home Assistant version
-      description: Example: 2026.8.2
+      description: Also included in diagnostics, but useful for quickly scanning issues.
       placeholder: 2026.x.x
     validations:
       required: true
@@ -47,7 +72,7 @@ body:
     id: integration_version
     attributes:
       label: Reolink Battery integration version
-      description: Find this in HACS or the integration manifest.
+      description: Also included in diagnostics. Find it in HACS or the integration manifest.
       placeholder: 1.3.x
     validations:
       required: true
@@ -56,8 +81,41 @@ body:
     id: camera_model
     attributes:
       label: Camera model
-      description: Example: Argus 2E. This is also present in diagnostics, but adding it here makes issue triage easier.
+      description: Also included in diagnostics, but useful for quickly identifying device-specific reports.
       placeholder: Argus 2E
+    validations:
+      required: true
+
+  - type: input
+    id: camera_firmware
+    attributes:
+      label: Camera firmware version
+      description: Optional. Add it when known, especially for connection, Live View, audio, or recording issues.
+      placeholder: Optional
+
+  - type: dropdown
+    id: official_app
+    attributes:
+      label: Did the official Reolink app work at the same time?
+      description: Test the same camera/function in the Reolink app when practical.
+      options:
+        - Yes
+        - No
+        - Not tested
+        - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phone_notification
+    attributes:
+      label: For motion/recording problems, did the phone receive the Reolink notification?
+      description: Select Not applicable for unrelated problems.
+      options:
+        - Yes
+        - No
+        - Not sure
+        - Not applicable
     validations:
       required: true
 
@@ -65,8 +123,8 @@ body:
     id: problem
     attributes:
       label: What happened?
-      description: Describe the problem clearly. Include when it started and whether it is reproducible.
-      placeholder: Tell us what you observed.
+      description: Describe the observed result. For recording issues, say whether the notification arrived, whether a recording eventually appeared, and approximately how long you waited.
+      placeholder: Tell us exactly what you observed.
     validations:
       required: true
 
@@ -76,10 +134,10 @@ body:
       label: Steps to reproduce
       description: List the shortest sequence that reproduces the problem.
       placeholder: |
-        1. Open ...
-        2. Click ...
-        3. Wait ...
-        4. Error appears ...
+        1. Trigger motion / open Live View / ...
+        2. Wait ...
+        3. Observe ...
+        4. Download diagnostics ...
     validations:
       required: true
 
@@ -100,7 +158,9 @@ body:
 
         **Drag the downloaded diagnostics file into this field.** GitHub will insert an attachment link. Please attach the file rather than pasting hundreds of lines of JSON into the issue.
 
-        Diagnostics include camera/auth metadata, notification and event state, recording-worker state, Live View/go2rtc state, and protocol telemetry while intentionally excluding credentials and other secrets.
+        Take diagnostics **after reproducing the problem** and, when possible, after the workflow has reached the failed/stuck state you are reporting.
+
+        Diagnostics include Home Assistant and integration versions, camera/auth metadata, notification and event state, recording-worker state, Live View/go2rtc state, and secret-safe protocol telemetry.
       placeholder: Drag the downloaded diagnostics file here. GitHub will insert a link to the attachment.
     validations:
       required: true
@@ -131,7 +191,9 @@ body:
           required: true
         - label: I restarted Home Assistant after updating the integration.
           required: true
-        - label: I attached the Reolink Battery diagnostics file generated after reproducing the problem.
+        - label: I reproduced the problem before downloading the attached diagnostics.
+          required: true
+        - label: I attached the Reolink Battery diagnostics file and did not paste the full JSON into the issue body.
           required: true
         - label: I have not included passwords, tokens, camera credentials, or other secrets in this issue.
           required: true
