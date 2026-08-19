@@ -12,9 +12,11 @@ from aiohttp import web
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 
 from .const import (
+    CONF_AUTH_PATH,
     CONF_DEVICE_PASSWORD,
     CONF_DEVICE_USERNAME,
     CONF_INTERFACE,
+    CONF_MODEL,
     CONF_UID,
     DOMAIN,
 )
@@ -27,6 +29,7 @@ HTTP_AAC_PATH = "/api/reolink_battery/{entry_id}/main.aac"
 _MAX_VIDEO_QUEUE = 64
 _MAX_AUDIO_QUEUE = 512
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
+ISSUE_COPY_MARKER = "### COPY THIS BLOCK TO GITHUB ISSUE ###"
 
 
 def h264_path(entry_id: str) -> str:
@@ -47,6 +50,16 @@ def _local_request(remote: str | None) -> bool:
     if address.is_loopback or address.is_private:
         return True
     return isinstance(address, ipaddress.IPv4Address) and address in _CGNAT
+
+
+def _redacted_uid(uid: str) -> str:
+    if len(uid) <= 6:
+        return "***"
+    return f"{uid[:3]}…{uid[-3:]}"
+
+
+def _iso(value) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 class ReolinkBatteryLiveHub:
@@ -71,8 +84,8 @@ class ReolinkBatteryLiveHub:
         task = self._producer_task
         return task is not None and not task.done()
 
-    def diagnostics_snapshot(self) -> dict[str, object]:
-        """Return only secret-safe Live View runtime telemetry."""
+    def _live_state(self) -> dict[str, object]:
+        """Return secret-safe Live View runtime telemetry."""
         trace = self._last_trace
         return {
             "active": self.is_active,
@@ -97,6 +110,165 @@ class ReolinkBatteryLiveHub:
                 if trace is not None
                 else None
             ),
+        }
+
+    def _issue_report_snapshot(self, live_state: dict[str, object]) -> dict[str, object]:
+        """Build one compact, copy-ready, secret-safe GitHub issue snapshot."""
+        runtime = self.entry.runtime_data
+        if runtime is None:
+            return {
+                "diagnostics_schema": 1,
+                "runtime_available": False,
+            }
+
+        coordinator = runtime.coordinator
+        bridge = runtime.notification_bridge
+        worker = runtime.recording_worker
+        go2rtc = runtime.go2rtc_bridge
+
+        # These modules are already used by diagnostics.py. Keep the import lazy
+        # here so ordinary Live View startup does not initialize recording probes.
+        from .recording_download_beta22 import stream_probe_state
+
+        stream = stream_probe_state(self.entry.entry_id)
+        worker_state = worker.state if worker is not None else None
+
+        return {
+            "diagnostics_schema": 1,
+            "device": {
+                "model": self.entry.data.get(CONF_MODEL, ""),
+                "auth_path": self.entry.data.get(CONF_AUTH_PATH, ""),
+                "uid": _redacted_uid(self.entry.data.get(CONF_UID, "")),
+            },
+            "events": {
+                "last_successful_event_time": _iso(coordinator.last_successful_event_time),
+                "pending_count": len(coordinator.pending_events),
+                "processed_count": coordinator.processed_event_count,
+                "completed_recording_count": coordinator.completed_recording_count,
+                "last_failure_stage": coordinator.last_failure_stage or None,
+                "last_failure_type": coordinator.last_failure_type or None,
+            },
+            "notification_bridge": {
+                "configured": bridge is not None,
+                "listener_active": bool(bridge and bridge.active),
+                "last_reolink_notification_time": _iso(
+                    bridge.last_reolink_notification_time if bridge else None
+                ),
+                "last_event_matched": bool(bridge and bridge.last_event_matched),
+                "last_event_queued": bool(bridge and bridge.last_event_queued),
+                "duplicate_rejected": bool(
+                    bridge and bridge.last_duplicate_rejected
+                ),
+                "last_processing_lag_seconds": (
+                    bridge.last_processing_lag_seconds if bridge else None
+                ),
+                "stale_repost_promoted_count": (
+                    getattr(bridge, "stale_repost_promoted_count", 0)
+                    if bridge else 0
+                ),
+                "stale_repost_suppressed_count": (
+                    getattr(bridge, "stale_repost_suppressed_count", 0)
+                    if bridge else 0
+                ),
+                "last_stale_repost_promoted": bool(
+                    bridge and getattr(bridge, "last_stale_repost_promoted", False)
+                ),
+                "last_effective_event_time": _iso(
+                    getattr(bridge, "last_effective_event_time", None)
+                    if bridge else None
+                ),
+                "last_effective_event_time_source": (
+                    getattr(bridge, "last_effective_event_time_source", "")
+                    if bridge else ""
+                ),
+            },
+            "recording_worker": {
+                "configured": worker is not None,
+                "enabled": bool(worker_state and worker_state.enabled),
+                "running": bool(worker_state and worker_state.running),
+                "waiting_camera_closed": bool(
+                    worker_state and worker_state.waiting_camera_closed
+                ),
+                "attempts": worker_state.attempts if worker_state else 0,
+                "retries": worker_state.retries if worker_state else 0,
+                "completed": worker_state.completed if worker_state else 0,
+                "last_event_time": _iso(
+                    worker_state.last_event_time if worker_state else None
+                ),
+                "last_attempt_time": _iso(
+                    worker_state.last_attempt_time if worker_state else None
+                ),
+                "last_completed_time": _iso(
+                    worker_state.last_completed_time if worker_state else None
+                ),
+                "last_failure_stage": (
+                    worker_state.last_failure_stage or None
+                    if worker_state else None
+                ),
+                "last_failure_type": (
+                    worker_state.last_failure_type or None
+                    if worker_state else None
+                ),
+                "last_file_saved": bool(
+                    worker_state and worker_state.last_file_saved
+                ),
+                "last_file_size": worker_state.last_file_size if worker_state else 0,
+                "uid_resolve_succeeded": bool(
+                    worker_state and worker_state.last_uid_resolve_succeeded
+                ),
+                "uid_resolve_elapsed_ms": (
+                    worker_state.last_uid_resolve_elapsed_ms
+                    if worker_state else None
+                ),
+            },
+            "recording_download": {
+                "attempted": stream.attempted,
+                "cmd13_frames": stream.cmd13_frames,
+                "cmd8_attempted": stream.cmd8_attempted,
+                "cmd8_frames": stream.cmd8_frames,
+                "cmd8_media_observed": stream.cmd8_media_observed,
+                "file_write_attempted": stream.file_write_attempted,
+                "file_bytes_written": stream.file_bytes_written,
+                "file_saved": stream.file_saved,
+                "final_size": stream.final_size,
+                "final_size_match": stream.final_size_match,
+                "termination_reason": stream.termination_reason or None,
+                "elapsed_seconds": stream.elapsed_seconds,
+                "response_codes": list(stream.response_codes),
+                "udp_bc_packets_received": stream.udp_bc_packets_received,
+                "udp_missing_packet_count": stream.udp_missing_packet_count,
+                "udp_recovered_missing_packet_count": (
+                    stream.udp_recovered_missing_packet_count
+                ),
+                "udp_unresolved_missing_packet_count_at_disconnect": (
+                    stream.udp_unresolved_missing_packet_count_at_disconnect
+                ),
+                "remote_disconnect_observed": stream.remote_disconnect_observed,
+            },
+            "live_feed": live_state,
+            "go2rtc": {
+                "attempted": bool(go2rtc and go2rtc.attempted),
+                "success": bool(go2rtc and go2rtc.success),
+                "http_status": go2rtc.http_status if go2rtc else None,
+                "failure_type": go2rtc.failure_type if go2rtc else None,
+                "sources_registered": go2rtc.sources_registered if go2rtc else 0,
+                "stream_name_present": bool(go2rtc and go2rtc.stream_name),
+                "rtsp_url_present": bool(go2rtc and go2rtc.rtsp_url),
+            },
+            "privacy": {
+                "credentials_exposed": False,
+                "network_addresses_exposed": False,
+                "raw_media_exposed": False,
+                "recording_filenames_exposed": False,
+            },
+        }
+
+    def diagnostics_snapshot(self) -> dict[str, object]:
+        """Return secret-safe runtime telemetry plus a compact issue block."""
+        live_state = self._live_state()
+        return {
+            ISSUE_COPY_MARKER: self._issue_report_snapshot(live_state),
+            **live_state,
             "raw_media_exposed": False,
             "network_identifiers_exposed": False,
         }
