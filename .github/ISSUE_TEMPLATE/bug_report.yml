@@ -99,8 +99,8 @@ body:
       label: Did the official Reolink app work at the same time?
       description: Test the same camera/function in the Reolink app when practical.
       options:
-        - Yes
-        - No
+        - "Yes"
+        - "No"
         - Not tested
         - Not applicable
     validations:
@@ -112,8 +112,8 @@ body:
       label: For motion/recording problems, did the phone receive the Reolink notification?
       description: Select Not applicable for unrelated problems.
       options:
-        - Yes
-        - No
+        - "Yes"
+        - "No"
         - Not sure
         - Not applicable
     validations:
