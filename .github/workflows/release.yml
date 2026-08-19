@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "custom_components/reolink_battery/manifest.json"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read integration version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = Path('custom_components/reolink_battery/manifest.json')
+          print(json.loads(manifest.read_text(encoding='utf-8'))['version'])
+          PY
+          )
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Reolink Battery $TAG" \
+            --generate-notes
