@@ -98,6 +98,11 @@
       "prepare_pending_recording_download": {
         "name": "הכן הורדת הקלטה ממתינה"
       }
+    },
+    "camera": {
+      "live_view": {
+        "name": "תצוגה חיה"
+      }
     }
   }
 }
