@@ -101,8 +101,15 @@ class ReolinkBatteryLiveHub:
 
     def diagnostics_snapshot(self) -> dict[str, object]:
         """Return only secret-safe Live View runtime telemetry."""
+        runtime = self.entry.runtime_data
+        local = runtime.status.state.local if runtime is not None else None
+        info = local.device_info if local is not None else None
         return {
             **self._live_state(),
+            "device_metadata": {
+                "firmware": info.firmware if info is not None else None,
+                "hardware": info.hardware if info is not None else None,
+            },
             "raw_media_exposed": False,
             "network_identifiers_exposed": False,
         }
