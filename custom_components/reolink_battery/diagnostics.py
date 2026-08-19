@@ -33,6 +33,24 @@ async def async_get_config_entry_diagnostics(
     prepare = download_prepare_state(entry.entry_id)
     stream = stream_probe_state(entry.entry_id)
     worker = entry.runtime_data.recording_worker
+    live_hub = entry.runtime_data.live_hub
+    go2rtc = entry.runtime_data.go2rtc_bridge
+    live_snapshot = (
+        live_hub.diagnostics_snapshot()
+        if live_hub is not None
+        else {
+            "active": False,
+            "video_consumers": 0,
+            "audio_consumers": 0,
+            "sessions_started": 0,
+            "sessions_completed": 0,
+            "last_failure_stage": None,
+            "last_failure_type": None,
+            "last_session": None,
+            "raw_media_exposed": False,
+            "network_identifiers_exposed": False,
+        }
+    )
     return {
         "device": {
             "model": entry.data.get(CONF_MODEL, ""),
@@ -108,6 +126,21 @@ async def async_get_config_entry_diagnostics(
             "telemetry_restored_from_pending": bool(
                 bridge and bridge.telemetry_restored_from_pending
             ),
+        },
+        "live_view": {
+            "on_demand": True,
+            "hub_configured": live_hub is not None,
+            "session": live_snapshot,
+            "go2rtc": {
+                "attempted": bool(go2rtc and go2rtc.attempted),
+                "success": bool(go2rtc and go2rtc.success),
+                "http_status": go2rtc.http_status if go2rtc else None,
+                "failure_type": go2rtc.failure_type if go2rtc else None,
+                "sources_registered": go2rtc.sources_registered if go2rtc else 0,
+                "stream_name_present": bool(go2rtc and go2rtc.stream_name),
+                "rtsp_url_present": bool(go2rtc and go2rtc.rtsp_url),
+                "network_addresses_exposed": False,
+            },
         },
         "recording_probe": {
             "manual_only": True,
@@ -522,7 +555,7 @@ async def async_get_config_entry_diagnostics(
             },
             "raw_path_exposed": False,
         },
-        "milestone": "1.2.1-persistent-recording-dedupe",
+        "milestone": "1.3.1-live-view-diagnostics",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }
