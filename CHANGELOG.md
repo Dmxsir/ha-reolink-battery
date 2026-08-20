@@ -1,10 +1,10 @@
 # Changelog
 
 ## v1.3.7 (unreleased) — Battery-safe motion backlog processing
-- Requires explicit post-start state-change provenance before a stale Android notification can be promoted to an `android-repost`; an initial/restored state can never promote a repost, while an unseen deterministic event is retained and only wakes automatically when it is no more than 10 minutes old.
+- Requires explicit post-start state-change provenance before a stale Android notification can be promoted to an `android-repost`; a stale deterministic source never wakes the camera, while only its callback-time promoted event may wake.
 - Persists automatic recording deferrals in the existing bounded event queue, backward-compatible with stored v1 data.
 - Activates only newly accepted events and never re-arms unrelated deferred backlog when a fresh notification arrives.
-- Limits automatic startup recovery to the newest non-deferred Android event no more than 10 minutes old; older pending events are retained and marked deferred without contacting the camera.
+- Limits automatic startup recovery to the newest non-deferred Android event no more than 10 minutes old; all other pre-existing events are retained and persistently deferred without contacting the camera.
 - Adds secret-safe backlog-policy diagnostics and deterministic regression coverage.
 - Keeps the 60-second settle delay, shared local-operation lock, recording fingerprint deduplication, ready-event contract and verified cmd13/cmd8 transport unchanged.
 

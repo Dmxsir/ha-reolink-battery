@@ -47,6 +47,7 @@ async def async_get_config_entry_diagnostics(
             "stale_pending_count": 0,
             "startup_recovery_eligible": False,
             "startup_skipped_stale_count": 0,
+            "startup_not_selected_count": 0,
             "last_deferred_event_time": None,
             "last_deferred_reason": None,
             "last_startup_skipped_event_time": None,

@@ -348,14 +348,50 @@ class RecordingBacklogPolicyTests(unittest.IsolatedAsyncioTestCase):
         newest = make_event("newest", now - timedelta(minutes=1))
         queue.enqueue(older)
         queue.enqueue(newest)
-        worker, _coordinator = make_worker(queue)
+        worker, coordinator = make_worker(queue)
 
         candidate = await worker.async_prepare_startup_recovery(now=now)
 
         self.assertEqual(candidate, newest)
         self.assertEqual(worker._activated_event_ids, {newest.event_id})
+        self.assertEqual(
+            coordinator.deferred_event_ids,
+            frozenset({older.event_id}),
+        )
+        self.assertEqual(coordinator.queue.last_deferred.reason, "startup_not_selected")
+        self.assertEqual(worker.state.startup_not_selected_count, 1)
+        self.assertEqual(worker.state.eligible_fresh_pending_count, 1)
         self.assertTrue(worker.state.startup_recovery_eligible)
         self.assertTrue(worker.state.pending_trigger)
+
+    async def test_repeated_startup_does_not_drain_unselected_fresh_backlog(self):
+        now = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+        older = make_event("older", now - timedelta(minutes=4))
+        newest = make_event("newest", now - timedelta(minutes=1))
+        queue = events.EventQueue()
+        queue.enqueue(older)
+        queue.enqueue(newest)
+        worker, coordinator = make_worker(queue)
+
+        candidate = await worker.async_prepare_startup_recovery(now=now)
+
+        self.assertEqual(candidate, newest)
+        self.assertIn(older.event_id, coordinator.deferred_event_ids)
+        self.assertEqual(coordinator.queue.last_deferred.reason, "startup_not_selected")
+        await coordinator.async_complete_event(newest.event_id)
+
+        restored = events.EventQueue()
+        restored.load(queue.as_storage())
+        restarted_worker, restarted_coordinator = make_worker(restored)
+        restarted_candidate = await restarted_worker.async_prepare_startup_recovery(
+            now=now + timedelta(minutes=1)
+        )
+
+        self.assertIsNone(restarted_candidate)
+        self.assertEqual(restored.pending, (older,))
+        self.assertIn(older.event_id, restarted_coordinator.deferred_event_ids)
+        self.assertEqual(restarted_worker._activated_event_ids, set())
+        self.assertFalse(restarted_worker.state.pending_trigger)
 
     async def test_startup_freshness_boundary_is_inclusive_at_600_seconds(self):
         now = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
@@ -373,10 +409,18 @@ class RecordingBacklogPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(events.is_automatic_event_fresh(boundary, now))
         self.assertFalse(events.is_automatic_event_fresh(above, now))
         self.assertEqual(candidate, below)
-        self.assertNotIn(boundary.event_id, coordinator.deferred_event_ids)
+        self.assertIn(boundary.event_id, coordinator.deferred_event_ids)
         self.assertIn(above.event_id, coordinator.deferred_event_ids)
-        self.assertEqual(worker.state.eligible_fresh_pending_count, 2)
+        reasons = {
+            item["event_id"]: item["reason"]
+            for item in coordinator.queue.as_storage()["deferred_events"]
+        }
+        self.assertEqual(reasons[boundary.event_id], "startup_not_selected")
+        self.assertEqual(reasons[above.event_id], "startup_event_stale")
+        self.assertEqual(worker.state.eligible_fresh_pending_count, 1)
         self.assertEqual(worker.state.stale_pending_count, 1)
+        self.assertEqual(worker.state.startup_not_selected_count, 1)
+        self.assertEqual(worker.state.deferred_count, 2)
 
     async def test_newest_activated_fresh_event_wins(self):
         now = datetime.now(UTC)

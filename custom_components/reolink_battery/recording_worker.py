@@ -60,6 +60,7 @@ class RecordingWorkerState:
     stale_pending_count: int = 0
     startup_recovery_eligible: bool = False
     startup_skipped_stale_count: int = 0
+    startup_not_selected_count: int = 0
     last_startup_skipped_event_time: datetime | None = None
     retry_preemptions: int = 0
     last_preempted_event_time: datetime | None = None
@@ -223,6 +224,18 @@ class RecordingWorker:
 
         eligible = self._eligible_pending_events(now)
         candidate = max(eligible, key=self._event_time, default=None)
+        not_selected = [
+            event
+            for event in eligible
+            if candidate is not None and event.event_id != candidate.event_id
+        ]
+        self.state.startup_not_selected_count = len(not_selected)
+        for event in not_selected:
+            await coordinator.async_defer_event(
+                event.event_id,
+                "startup_not_selected",
+                deferred_at=now,
+            )
         self.state.startup_recovery_eligible = candidate is not None
         self._refresh_pending_counts(now)
         if candidate is not None:
@@ -258,6 +271,7 @@ class RecordingWorker:
             "stale_pending_count": self.state.stale_pending_count,
             "startup_recovery_eligible": self.state.startup_recovery_eligible,
             "startup_skipped_stale_count": self.state.startup_skipped_stale_count,
+            "startup_not_selected_count": self.state.startup_not_selected_count,
             "last_deferred_event_time": (
                 self._event_time(last_deferred_pending).isoformat()
                 if last_deferred_pending is not None

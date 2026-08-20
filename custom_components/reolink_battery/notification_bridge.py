@@ -238,10 +238,7 @@ class NotificationBridge:
         )
         allow_automatic_wake = bool(
             new_notification is not None
-            and (
-                is_automatic_event_fresh(new_notification, observed_at)
-                or allow_stale_repost
-            )
+            and is_automatic_event_fresh(new_notification, observed_at)
         )
         self._hass.async_create_task(
             self.async_process_attributes(
@@ -308,20 +305,27 @@ class NotificationBridge:
         self.last_effective_event_time_source = "notification_post_time"
 
         source_event = event
-        added = await self._ingest_event(event, allow_automatic_wake)
-
-        # The Companion Last Notification sensor is INTENT_ONLY and force-updates
-        # on Android onNotificationPosted callbacks. If the same already-processed
-        # event ID comes back with a post_time older than five minutes, a proven
-        # post-start update of that same source may represent a new occurrence.
-        # Collapse rapid reposts to avoid duplicate downloads caused by one
-        # Android notification being updated several times.
-        if (
-            not added
-            and allow_stale_repost
+        stale_repost_candidate = bool(
+            allow_stale_repost
             and self.last_processing_lag_seconds is not None
             and self.last_processing_lag_seconds >= _STALE_REPOST_MIN_AGE_SECONDS
-        ):
+        )
+        source_can_wake = (
+            allow_automatic_wake
+            and not stale_repost_candidate
+            and is_automatic_event_fresh(source_event, observed_at)
+        )
+        added = await self._ingest_event(source_event, source_can_wake)
+
+        # The Companion Last Notification sensor is INTENT_ONLY and force-updates
+        # on Android onNotificationPosted callbacks. If the same source event ID
+        # comes back with a post_time older than five minutes, a proven post-start
+        # update of that source may represent a new occurrence. The stale source
+        # itself is retained without wake permission; only this callback-time
+        # promotion may wake the automatic worker.
+        # Collapse rapid reposts to avoid duplicate downloads caused by one
+        # Android notification being updated several times.
+        if stale_repost_candidate:
             if same_source_recent:
                 self.stale_repost_suppressed_count += 1
             else:
