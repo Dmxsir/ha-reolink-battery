@@ -4,14 +4,13 @@ These tests protect the durable beta.33 transport contract while allowing later
 betas to extend diagnostics and pass an explicit protocol snapshot.
 """
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 BETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"
 BETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"
 DIAG = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"
-MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
 
 
 def function_slice(source: str, marker: str, next_marker: str) -> str:
@@ -62,7 +61,7 @@ class Beta33ReliableUdpTests(unittest.TestCase):
         ):
             self.assertIn(needle, source)
 
-    def test_reliable_udp_diagnostics_and_version_family_persist(self):
+    def test_reliable_udp_diagnostics_persist(self):
         diag = DIAG.read_text()
         for needle in (
             '"cmd13_udp_ack_received"',
@@ -76,8 +75,6 @@ class Beta33ReliableUdpTests(unittest.TestCase):
         # Later milestones intentionally replace beta.33's milestone label.
         # Guard the surviving feature rather than pinning an obsolete label.
         self.assertIn("reliable", BETA20.read_text().lower())
-        manifest = MANIFEST.read_text()
-        self.assertIn('"version": "0.1.2-beta.', manifest)
 
 
 if __name__ == "__main__":

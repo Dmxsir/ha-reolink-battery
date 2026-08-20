@@ -1,8 +1,8 @@
 """Regression guards for beta.43 fresh retry preemption."""
 
-from pathlib import Path
 import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 WORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"
@@ -55,8 +55,7 @@ class Beta43FreshRetryPreemptionTests(unittest.TestCase):
         self.assertIn('"retry_preemption_policy": "newer_notification_before_retry"', diagnostics)
         self.assertIn('"prior_attempt": {', diagnostics)
         version = json.loads(MANIFEST.read_text())["version"]
-        self.assertTrue(version.startswith("0.1.2-beta."))
-        self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 43)
+        self.assertEqual(version, "1.3.7")
 
 
 if __name__ == "__main__":

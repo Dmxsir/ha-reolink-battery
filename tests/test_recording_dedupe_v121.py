@@ -1,8 +1,8 @@
 """Regression guards for v1.2.1 persistent recording dedupe."""
 
-from pathlib import Path
 import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 COMP = ROOT / "custom_components" / "reolink_battery"
@@ -11,7 +11,7 @@ COMP = ROOT / "custom_components" / "reolink_battery"
 class RecordingDedupeV121Tests(unittest.TestCase):
     def test_version(self):
         manifest = json.loads((COMP / "manifest.json").read_text())
-        self.assertEqual(manifest["version"], "1.2.1")
+        self.assertEqual(manifest["version"], "1.3.7")
 
     def test_persistent_fingerprint_store(self):
         events = (COMP / "events.py").read_text()

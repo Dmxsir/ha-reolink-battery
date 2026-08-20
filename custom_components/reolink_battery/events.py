@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .const import (
+    AUTOMATIC_RECORDING_EVENT_MAX_AGE,
     MAX_COMPLETED_RECORDINGS,
     MAX_PENDING_EVENTS,
     MAX_PROCESSED_EVENT_IDS,
@@ -77,12 +78,36 @@ class CompletedRecording:
         }
 
     @classmethod
-    def from_storage(cls, data: dict[str, object]) -> "CompletedRecording":
+    def from_storage(cls, data: dict[str, object]) -> CompletedRecording:
         return cls(
             fingerprint=str(data["fingerprint"]),
             start_time=datetime.fromisoformat(str(data["start_time"])),
             end_time=datetime.fromisoformat(str(data["end_time"])),
             size=int(data.get("size") or 0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredEvent:
+    """Persistent reason that automatic processing must skip one event."""
+
+    event_id: str
+    reason: str
+    deferred_at: datetime
+
+    def as_storage(self) -> dict[str, object]:
+        return {
+            "event_id": self.event_id,
+            "reason": self.reason,
+            "deferred_at": self.deferred_at.isoformat(),
+        }
+
+    @classmethod
+    def from_storage(cls, data: dict[str, object]) -> DeferredEvent:
+        return cls(
+            event_id=str(data["event_id"]),
+            reason=str(data.get("reason") or "unspecified"),
+            deferred_at=parse_alarm_time(data["deferred_at"]),
         )
 
 
@@ -98,6 +123,13 @@ def parse_alarm_time(value: object) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def is_automatic_event_fresh(event: CloudEvent, now: datetime) -> bool:
+    """Return whether an event may automatically wake the camera."""
+    event_time = event.notification_post_time or event.alarm_time
+    age = now.astimezone(UTC) - event_time.astimezone(UTC)
+    return age <= AUTOMATIC_RECORDING_EVENT_MAX_AGE
 
 
 def _items(payload: object) -> Iterable[dict[str, Any]]:
@@ -168,6 +200,7 @@ class EventQueue:
         self._processed_set: set[str] = set()
         self._pending: list[CloudEvent] = []
         self._completed_recordings: list[CompletedRecording] = []
+        self._deferred: dict[str, DeferredEvent] = {}
 
     @property
     def pending(self) -> tuple[CloudEvent, ...]:
@@ -184,6 +217,22 @@ class EventQueue:
     @property
     def completed_recording_count(self) -> int:
         return len(self._completed_recordings)
+
+    @property
+    def deferred_event_ids(self) -> frozenset[str]:
+        return frozenset(self._deferred)
+
+    @property
+    def deferred_count(self) -> int:
+        return len(self._deferred)
+
+    @property
+    def last_deferred(self) -> DeferredEvent | None:
+        return max(
+            self._deferred.values(),
+            key=lambda item: item.deferred_at,
+            default=None,
+        )
 
     def remember_completed_recording(self, recording: CompletedRecording) -> bool:
         if recording.fingerprint in self.completed_recording_fingerprints:
@@ -204,11 +253,27 @@ class EventQueue:
             if all(item.event_id != expired for item in self._pending):
                 self._processed_set.discard(expired)
         if len(self._pending) > MAX_PENDING_EVENTS:
-            self._pending.pop(0)
+            expired_pending = self._pending.pop(0)
+            self._deferred.pop(expired_pending.event_id, None)
         return True
 
-    def remove(self, event_id: str) -> None:
+    def remove(self, event_id: str) -> bool:
+        before = len(self._pending)
         self._pending = [event for event in self._pending if event.event_id != event_id]
+        deferred_removed = self._deferred.pop(event_id, None) is not None
+        return len(self._pending) != before or deferred_removed
+
+    def defer(self, event_id: str, reason: str, deferred_at: datetime) -> bool:
+        if not any(event.event_id == event_id for event in self._pending):
+            return False
+        deferred = DeferredEvent(event_id, reason, deferred_at.astimezone(UTC))
+        if self._deferred.get(event_id) == deferred:
+            return False
+        self._deferred[event_id] = deferred
+        return True
+
+    def rearm(self, event_id: str) -> bool:
+        return self._deferred.pop(event_id, None) is not None
 
     def load(self, data: object) -> None:
         if not isinstance(data, dict):
@@ -216,6 +281,8 @@ class EventQueue:
         processed = data.get("processed")
         pending = data.get("pending")
         completed_recordings = data.get("completed_recordings")
+        deferred_events = data.get("deferred_events")
+        self._deferred = {}
         if isinstance(processed, list):
             self._processed = [str(value) for value in processed][
                 -MAX_PROCESSED_EVENT_IDS:
@@ -245,6 +312,19 @@ class EventQueue:
                 except (KeyError, TypeError, ValueError):
                     continue
             self._completed_recordings = restored_recordings
+        if isinstance(deferred_events, list):
+            pending_ids = {event.event_id for event in self._pending}
+            restored_deferred: dict[str, DeferredEvent] = {}
+            for item in deferred_events[-MAX_PENDING_EVENTS:]:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    deferred = DeferredEvent.from_storage(item)
+                except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                    continue
+                if deferred.event_id in pending_ids:
+                    restored_deferred[deferred.event_id] = deferred
+            self._deferred = restored_deferred
 
     def as_storage(self) -> dict[str, object]:
         return {
@@ -253,5 +333,8 @@ class EventQueue:
             "completed_recordings": [
                 recording.as_storage()
                 for recording in self._completed_recordings[-MAX_COMPLETED_RECORDINGS:]
+            ],
+            "deferred_events": [
+                deferred.as_storage() for deferred in self._deferred.values()
             ],
         }

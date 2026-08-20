@@ -138,10 +138,16 @@ async def async_setup_entry(
 
         runtime.recording_worker = RecordingWorker(hass, entry)
 
-        async def ingest_notification(event) -> int:
+        async def ingest_notification(event, allow_automatic_wake: bool = True) -> int:
             added = await coordinator.async_ingest_events([event])
-            if added and runtime.recording_worker is not None:
-                runtime.recording_worker.notify()
+            if added:
+                if allow_automatic_wake and runtime.recording_worker is not None:
+                    runtime.recording_worker.notify(event.event_id)
+                elif not allow_automatic_wake:
+                    await coordinator.async_defer_event(
+                        event.event_id,
+                        "initial_state_stale",
+                    )
             return added
 
         initial_notification_event = next(
@@ -187,16 +193,12 @@ async def async_setup_entry(
         hass, coordinator.async_run(), "reolink_battery cloud event polling"
     )
     if runtime.recording_worker is not None:
+        await runtime.recording_worker.async_prepare_startup_recovery()
         entry.async_create_background_task(
             hass,
             runtime.recording_worker.async_run(),
             "reolink_battery verified recording worker",
         )
-        if any(
-            event.source == "android_notification"
-            for event in coordinator.pending_events
-        ):
-            runtime.recording_worker.notify()
     return True
 
 

@@ -7,9 +7,14 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from . import ReolinkBatteryConfigEntry
-from .const import CONF_AUTH_PATH, CONF_MODEL, CONF_UID
-from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
+from .const import (
+    AUTOMATIC_RECORDING_EVENT_MAX_AGE,
+    CONF_AUTH_PATH,
+    CONF_MODEL,
+    CONF_UID,
+)
 from .recording_download_beta22 import stream_probe_state
+from .recording_download_probe import ROUTING_LAYOUT, download_prepare_state
 from .recording_probe import probe_state
 
 
@@ -33,6 +38,23 @@ async def async_get_config_entry_diagnostics(
     prepare = download_prepare_state(entry.entry_id)
     stream = stream_probe_state(entry.entry_id)
     worker = entry.runtime_data.recording_worker
+    worker_policy = (
+        worker.policy_diagnostics()
+        if worker is not None
+        else {
+            "persistent_deferred_count": coordinator.deferred_event_count,
+            "eligible_fresh_pending_count": 0,
+            "stale_pending_count": 0,
+            "startup_recovery_eligible": False,
+            "startup_skipped_stale_count": 0,
+            "last_deferred_event_time": None,
+            "last_deferred_reason": None,
+            "last_startup_skipped_event_time": None,
+            "automatic_event_max_age_seconds": int(
+                AUTOMATIC_RECORDING_EVENT_MAX_AGE.total_seconds()
+            ),
+        }
+    )
     live_hub = entry.runtime_data.live_hub
     go2rtc = entry.runtime_data.go2rtc_bridge
     live_snapshot = (
@@ -125,6 +147,13 @@ async def async_get_config_entry_diagnostics(
             ),
             "telemetry_restored_from_pending": bool(
                 bridge and bridge.telemetry_restored_from_pending
+            ),
+            "stale_repost_requires_runtime_provenance": True,
+            "stale_repost_promoted_count": (
+                bridge.stale_repost_promoted_count if bridge else 0
+            ),
+            "stale_repost_suppressed_count": (
+                bridge.stale_repost_suppressed_count if bridge else 0
             ),
         },
         "live_view": {
@@ -464,6 +493,7 @@ async def async_get_config_entry_diagnostics(
                 worker and worker.state.last_duplicate_recording_fingerprint_present
             ),
             "deferred_count": worker.state.deferred_count if worker else 0,
+            **worker_policy,
             "deferred_rearmed_count": (
                 worker.state.deferred_rearmed_count if worker else 0
             ),
@@ -476,8 +506,9 @@ async def async_get_config_entry_diagnostics(
                 worker.state.last_preempting_event_time.isoformat()
                 if worker and worker.state.last_preempting_event_time else None
             ),
-            "selection_policy": "newest_pending_first",
-            "deferred_rearm_policy": "new_notification",
+            "selection_policy": "newest_activated_fresh_first",
+            "deferred_rearm_policy": "explicit_only",
+            "startup_recovery_policy": "newest_fresh_non_deferred_only",
             "retry_preemption_policy": "newer_notification_before_retry",
             "last_event_time": (
                 worker.state.last_event_time.isoformat()
