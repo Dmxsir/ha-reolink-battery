@@ -27,6 +27,9 @@ AUTH_PATH_LEGACY = "legacy_local_credential"
 DEFAULT_DEVICE_USERNAME = "admin"
 DEFAULT_POLL_INTERVAL = timedelta(seconds=15)
 DEFAULT_EVENT_WINDOW = timedelta(minutes=2)
+# Ten minutes covers the 60-second recording settle plus bounded retry delays.
+# Events exactly at this age remain eligible; older events are stale.
+AUTOMATIC_RECORDING_EVENT_MAX_AGE = timedelta(minutes=10)
 MAX_PROCESSED_EVENT_IDS = 512
 MAX_PENDING_EVENTS = 100
 MAX_COMPLETED_RECORDINGS = 256

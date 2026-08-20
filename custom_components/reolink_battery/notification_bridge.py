@@ -13,7 +13,7 @@ from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import REOLINK_ANDROID_PACKAGE, REOLINK_NOTIFICATION_CHANNEL
-from .events import CloudEvent, parse_alarm_time
+from .events import CloudEvent, is_automatic_event_fresh, parse_alarm_time
 
 _ENGLISH_ALARM = re.compile(r"^\s*An\s+alarm\s+from\s+(.+?)\.?\s*$", re.IGNORECASE)
 _STALE_REPOST_MIN_AGE_SECONDS = 300.0
@@ -186,7 +186,8 @@ class NotificationBridge:
             self.last_effective_event_time = restored_time
             self.last_effective_event_time_source = "restored_pending"
             self._last_source_event_id = initial_event.event_id
-            self._last_source_observed_at = datetime.now(UTC)
+            # Restoration is telemetry only, not a post-start Android callback.
+            self._last_source_observed_at = None
             self.telemetry_restored_from_pending = True
 
     @property
@@ -210,11 +211,42 @@ class NotificationBridge:
 
     @callback
     def _handle_state_change(self, event: Event) -> None:
+        old_state: State | None = event.data.get("old_state")
         new_state: State | None = event.data.get("new_state")
         if new_state is None:
             return
+
+        observed_at = datetime.now(UTC)
+        new_notification = notification_event_from_attributes(
+            new_state.attributes,
+            expected_device_name=self._expected_device_name,
+            uid=self._uid,
+        )
+        old_notification = (
+            notification_event_from_attributes(
+                old_state.attributes,
+                expected_device_name=self._expected_device_name,
+                uid=self._uid,
+            )
+            if old_state is not None
+            else None
+        )
+        allow_stale_repost = (
+            old_notification is not None
+            and new_notification is not None
+            and old_notification.event_id == new_notification.event_id
+        )
+        allow_automatic_wake = bool(
+            new_notification is not None
+            and is_automatic_event_fresh(new_notification, observed_at)
+        )
         self._hass.async_create_task(
-            self.async_process_attributes(new_state.attributes),
+            self.async_process_attributes(
+                new_state.attributes,
+                observed_at=observed_at,
+                allow_stale_repost=allow_stale_repost,
+                allow_automatic_wake=allow_automatic_wake,
+            ),
             "reolink_battery notification event",
         )
 
@@ -223,6 +255,8 @@ class NotificationBridge:
         attributes: Mapping[str, Any],
         *,
         observed_at: datetime | None = None,
+        allow_stale_repost: bool = False,
+        allow_automatic_wake: bool = True,
     ) -> bool:
         """Match, normalize and persist one notification update."""
         observed_at = observed_at or datetime.now(UTC)
@@ -271,24 +305,32 @@ class NotificationBridge:
         self.last_effective_event_time_source = "notification_post_time"
 
         source_event = event
-        added = await self._ingest_event(event)
-
-        # The Companion Last Notification sensor is INTENT_ONLY and force-updates
-        # on Android onNotificationPosted callbacks. If the same already-processed
-        # event ID comes back with a post_time older than five minutes, treat a
-        # later callback as a new Reolink alarm occurrence. Collapse rapid reposts
-        # of the same source notification to avoid duplicate downloads caused by
-        # one Android notification being updated several times.
-        if (
-            not added
+        stale_repost_candidate = bool(
+            allow_stale_repost
             and self.last_processing_lag_seconds is not None
             and self.last_processing_lag_seconds >= _STALE_REPOST_MIN_AGE_SECONDS
-        ):
+        )
+        source_can_wake = (
+            allow_automatic_wake
+            and not stale_repost_candidate
+            and is_automatic_event_fresh(source_event, observed_at)
+        )
+        added = await self._ingest_event(source_event, source_can_wake)
+
+        # The Companion Last Notification sensor is INTENT_ONLY and force-updates
+        # on Android onNotificationPosted callbacks. If the same source event ID
+        # comes back with a post_time older than five minutes, a proven post-start
+        # update of that source may represent a new occurrence. The stale source
+        # itself is retained without wake permission; only this callback-time
+        # promotion may wake the automatic worker.
+        # Collapse rapid reposts to avoid duplicate downloads caused by one
+        # Android notification being updated several times.
+        if stale_repost_candidate:
             if same_source_recent:
                 self.stale_repost_suppressed_count += 1
             else:
                 promoted = _promote_stale_repost(source_event, observed_at)
-                promoted_added = await self._ingest_event(promoted)
+                promoted_added = await self._ingest_event(promoted, True)
                 if promoted_added:
                     event = promoted
                     added = promoted_added

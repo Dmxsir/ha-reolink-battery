@@ -12,7 +12,13 @@ from homeassistant.helpers.storage import Store
 
 from .cloud import CloudEventDecodeError, CloudTokens, ReolinkCloudClient
 from .const import DEFAULT_EVENT_WINDOW, DEFAULT_POLL_INTERVAL, DOMAIN, STORAGE_VERSION
-from .events import CompletedRecording, CloudEvent, EventQueue, parse_cloud_events
+from .events import (
+    CloudEvent,
+    CompletedRecording,
+    DeferredEvent,
+    EventQueue,
+    parse_cloud_events,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,6 +84,21 @@ class ReolinkBatteryCoordinator:
     def completed_recording_count(self) -> int:
         return self._queue.completed_recording_count
 
+    @property
+    def deferred_event_ids(self) -> frozenset[str]:
+        return self._queue.deferred_event_ids
+
+    @property
+    def deferred_event_count(self) -> int:
+        return self._queue.deferred_count
+
+    @property
+    def last_deferred_event(self) -> DeferredEvent | None:
+        return self._queue.last_deferred
+
+    def is_event_deferred(self, event_id: str) -> bool:
+        return event_id in self._queue.deferred_event_ids
+
     async def async_initialize(self) -> None:
         self._queue.load(await self._store.async_load())
         if self._queue.pending:
@@ -132,15 +153,33 @@ class ReolinkBatteryCoordinator:
         completed_recording: CompletedRecording | None = None,
     ) -> bool:
         """Complete an event and atomically remember its verified recording."""
-        before = len(self._queue.pending)
-        self._queue.remove(event_id)
-        changed = len(self._queue.pending) != before
+        changed = self._queue.remove(event_id)
         recording_added = (
             self._queue.remember_completed_recording(completed_recording)
             if completed_recording is not None
             else False
         )
         if changed or recording_added:
+            await self._store.async_save(self._queue.as_storage())
+        return changed
+
+    async def async_defer_event(
+        self,
+        event_id: str,
+        reason: str,
+        *,
+        deferred_at: datetime | None = None,
+    ) -> bool:
+        """Persistently exclude one pending event from automatic processing."""
+        changed = self._queue.defer(event_id, reason, deferred_at or datetime.now(UTC))
+        if changed:
+            await self._store.async_save(self._queue.as_storage())
+        return changed
+
+    async def async_rearm_event(self, event_id: str) -> bool:
+        """Explicitly make one deferred event eligible for future manual recovery."""
+        changed = self._queue.rearm(event_id)
+        if changed:
             await self._store.async_save(self._queue.as_storage())
         return changed
 

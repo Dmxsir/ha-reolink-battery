@@ -6,10 +6,8 @@ waits for recording finalization with no camera session open, then reuses the
 physically validated beta.22 cmd13 -> handle-bound cmd8 full-high path. A queue
 item is removed only after an atomically finalized MP4 is present on disk.
 
-Events that exhaust their bounded retry set are deferred for the lifetime of the
-current config-entry runtime so they cannot block newer motion events. Deferred
-events stay in the persistent queue and are retried after a config-entry reload
-or Home Assistant restart.
+Events that exhaust their bounded retry set are persistently deferred so they
+cannot block newer motion events or wake the camera again after a restart.
 """
 
 from __future__ import annotations
@@ -22,11 +20,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .const import (
+    AUTOMATIC_RECORDING_EVENT_MAX_AGE,
     CONF_DEVICE_PASSWORD,
     CONF_DEVICE_USERNAME,
     CONF_INTERFACE,
     CONF_UID,
 )
+from .events import is_automatic_event_fresh
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -56,6 +56,12 @@ class RecordingWorkerState:
     last_duplicate_recording_fingerprint_present: bool = False
     deferred_count: int = 0
     deferred_rearmed_count: int = 0
+    eligible_fresh_pending_count: int = 0
+    stale_pending_count: int = 0
+    startup_recovery_eligible: bool = False
+    startup_skipped_stale_count: int = 0
+    startup_not_selected_count: int = 0
+    last_startup_skipped_event_time: datetime | None = None
     retry_preemptions: int = 0
     last_preempted_event_time: datetime | None = None
     last_preempting_event_time: datetime | None = None
@@ -102,15 +108,15 @@ class RecordingWorker:
         self._entry = entry
         self._trigger = asyncio.Event()
         self._stopped = asyncio.Event()
-        self._deferred_event_ids: set[str] = set()
+        self._activated_event_ids: set[str] = set()
         self.state = RecordingWorkerState()
+        self.state.deferred_count = (
+            self._entry.runtime_data.coordinator.deferred_event_count
+        )
 
-    def notify(self) -> None:
-        """Signal new work and re-arm deferred backlog for the fresh wake window."""
-        if self._deferred_event_ids:
-            self._deferred_event_ids.clear()
-            self.state.deferred_count = 0
-            self.state.deferred_rearmed_count += 1
+    def notify(self, event_id: str) -> None:
+        """Activate one accepted event without re-arming unrelated backlog."""
+        self._activated_event_ids.add(event_id)
         self.state.pending_trigger = True
         self._trigger.set()
 
@@ -120,19 +126,57 @@ class RecordingWorker:
         self._stopped.set()
         self._trigger.set()
 
-    def _next_android_event(self) -> CloudEvent | None:
-        """Return newest Android event not deferred in this runtime.
+    @staticmethod
+    def _event_time(event: CloudEvent) -> datetime:
+        return event.notification_post_time or event.alarm_time
+
+    @classmethod
+    def _is_fresh(cls, event: CloudEvent, now: datetime) -> bool:
+        return is_automatic_event_fresh(event, now)
+
+    def _eligible_pending_events(self, now: datetime) -> list[CloudEvent]:
+        coordinator = self._entry.runtime_data.coordinator
+        return [
+            event
+            for event in coordinator.pending_events
+            if event.source == "android_notification"
+            and not coordinator.is_event_deferred(event.event_id)
+            and self._is_fresh(event, now)
+        ]
+
+    def _refresh_pending_counts(self, now: datetime | None = None) -> None:
+        now = now or datetime.now(UTC)
+        coordinator = self._entry.runtime_data.coordinator
+        android_pending = [
+            event
+            for event in coordinator.pending_events
+            if event.source == "android_notification"
+        ]
+        self.state.deferred_count = coordinator.deferred_event_count
+        self.state.eligible_fresh_pending_count = len(
+            self._eligible_pending_events(now)
+        )
+        self.state.stale_pending_count = sum(
+            not self._is_fresh(event, now) for event in android_pending
+        )
+
+    def _next_android_event(self, now: datetime | None = None) -> CloudEvent | None:
+        """Return newest activated, fresh and non-deferred Android event.
 
         A fresh motion notification must not wait behind stale backlog: the camera
         is naturally awake around the fresh event, so newest-first maximizes the
         chance of completing that recording before deep sleep. Older pending
-        events remain persistent and are processed afterwards.
+        events remain persistent for diagnosis or explicit future recovery.
         """
+        now = now or datetime.now(UTC)
+        coordinator = self._entry.runtime_data.coordinator
         candidates = (
             event
-            for event in self._entry.runtime_data.coordinator.pending_events
+            for event in coordinator.pending_events
             if event.source == "android_notification"
-            and event.event_id not in self._deferred_event_ids
+            and event.event_id in self._activated_event_ids
+            and not coordinator.is_event_deferred(event.event_id)
+            and self._is_fresh(event, now)
         )
         return max(
             candidates,
@@ -140,17 +184,111 @@ class RecordingWorker:
             default=None,
         )
 
-    def _defer_event(self, event: CloudEvent) -> None:
-        """Defer a failed event without deleting it from persistent storage."""
-        self._deferred_event_ids.add(event.event_id)
-        self.state.deferred_count = len(self._deferred_event_ids)
+    async def _defer_event(self, event: CloudEvent, reason: str) -> None:
+        """Persistently defer a failed/stale event without deleting it."""
+        await self._entry.runtime_data.coordinator.async_defer_event(
+            event.event_id,
+            reason,
+        )
+        self._activated_event_ids.discard(event.event_id)
+        self.state.deferred_count = (
+            self._entry.runtime_data.coordinator.deferred_event_count
+        )
         self.state.last_deferred_event_time = (
             event.notification_post_time or event.alarm_time
         )
 
-    @staticmethod
-    def _event_time(event: CloudEvent) -> datetime:
-        return event.notification_post_time or event.alarm_time
+    async def async_prepare_startup_recovery(
+        self, *, now: datetime | None = None
+    ) -> CloudEvent | None:
+        """Classify startup backlog and activate at most its newest fresh event."""
+        now = now or datetime.now(UTC)
+        coordinator = self._entry.runtime_data.coordinator
+        android_pending = [
+            event
+            for event in coordinator.pending_events
+            if event.source == "android_notification"
+        ]
+        stale = [event for event in android_pending if not self._is_fresh(event, now)]
+        self.state.startup_skipped_stale_count = len(stale)
+        self.state.last_startup_skipped_event_time = (
+            max((self._event_time(event) for event in stale), default=None)
+        )
+        for event in stale:
+            if not coordinator.is_event_deferred(event.event_id):
+                await coordinator.async_defer_event(
+                    event.event_id,
+                    "startup_event_stale",
+                    deferred_at=now,
+                )
+
+        eligible = self._eligible_pending_events(now)
+        candidate = max(eligible, key=self._event_time, default=None)
+        not_selected = [
+            event
+            for event in eligible
+            if candidate is not None and event.event_id != candidate.event_id
+        ]
+        self.state.startup_not_selected_count = len(not_selected)
+        for event in not_selected:
+            await coordinator.async_defer_event(
+                event.event_id,
+                "startup_not_selected",
+                deferred_at=now,
+            )
+        self.state.startup_recovery_eligible = candidate is not None
+        self._refresh_pending_counts(now)
+        if candidate is not None:
+            self.notify(candidate.event_id)
+        return candidate
+
+    async def _defer_stale_activated_events(self, now: datetime) -> None:
+        for event in self._entry.runtime_data.coordinator.pending_events:
+            if (
+                event.event_id in self._activated_event_ids
+                and not self._is_fresh(event, now)
+            ):
+                await self._defer_event(event, "automatic_event_stale")
+        self._refresh_pending_counts(now)
+
+    def policy_diagnostics(self) -> dict[str, object]:
+        """Return secret-safe automatic processing policy state."""
+        self._refresh_pending_counts()
+        coordinator = self._entry.runtime_data.coordinator
+        last_deferred = coordinator.last_deferred_event
+        last_deferred_pending = next(
+            (
+                event
+                for event in coordinator.pending_events
+                if last_deferred is not None
+                and event.event_id == last_deferred.event_id
+            ),
+            None,
+        )
+        return {
+            "persistent_deferred_count": coordinator.deferred_event_count,
+            "eligible_fresh_pending_count": self.state.eligible_fresh_pending_count,
+            "stale_pending_count": self.state.stale_pending_count,
+            "startup_recovery_eligible": self.state.startup_recovery_eligible,
+            "startup_skipped_stale_count": self.state.startup_skipped_stale_count,
+            "startup_not_selected_count": self.state.startup_not_selected_count,
+            "last_deferred_event_time": (
+                self._event_time(last_deferred_pending).isoformat()
+                if last_deferred_pending is not None
+                else None
+            ),
+            "last_deferred_reason": (
+                last_deferred.reason if last_deferred is not None else None
+            ),
+            "last_startup_skipped_event_time": (
+                self.state.last_startup_skipped_event_time.isoformat()
+                if self.state.last_startup_skipped_event_time is not None
+                else None
+            ),
+            "automatic_event_max_age_seconds": int(
+                AUTOMATIC_RECORDING_EVENT_MAX_AGE.total_seconds()
+            ),
+        }
 
     def _newer_pending_event(self, event: CloudEvent) -> CloudEvent | None:
         """Return a newer non-deferred Android event, if one is queued."""
@@ -253,13 +391,13 @@ class RecordingWorker:
         # camera and does not need to initialize this path until work exists.
         from .camera import CameraStageError
         from .events import CompletedRecording
-        from .recording_download_probe import RecordingAlreadyCompletedError
         from .recording_download_beta22 import (
             apply_stream_probe_trace,
             async_prepare_download_for_event,
             reset_stream_probe_state,
             stream_probe_state,
         )
+        from .recording_download_probe import RecordingAlreadyCompletedError
 
         if self.state.last_attempt_time is not None:
             prior_trace = stream_probe_state(self._entry.entry_id)
@@ -430,6 +568,7 @@ class RecordingWorker:
         return True
 
     async def _process_trigger(self) -> None:
+        await self._defer_stale_activated_events(datetime.now(UTC))
         event = self._next_android_event()
         while event is not None and not self._stopped.is_set():
             if not await self._settle_event(event):
@@ -452,17 +591,14 @@ class RecordingWorker:
                     self.state.retries += 1
                 if await self._process_once(event):
                     completed = True
+                    self._activated_event_ids.discard(event.event_id)
                     break
 
             if not completed and not preempted:
-                # Keep the failed event pending, but defer it for this runtime so
-                # it cannot head-of-line block a newer motion event. A config-entry
-                # reload or HA restart clears the in-memory deferral and retries it.
-                self._defer_event(event)
+                await self._defer_event(event, "automatic_retries_exhausted")
 
-            # Continue newest-first through non-deferred pending events. Fresh
-            # motion gets the natural wake window; stale backlog follows without
-            # adding polling or concurrent camera sessions.
+            # Continue newest-first only through explicitly activated fresh work.
+            await self._defer_stale_activated_events(datetime.now(UTC))
             event = self._next_android_event()
 
     async def async_run(self) -> None:

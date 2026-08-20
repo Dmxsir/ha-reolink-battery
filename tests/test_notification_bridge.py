@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 import types
@@ -157,11 +158,31 @@ class _FakeHass:
         self.created_tasks.append(True)
 
 
+class _AsyncFakeHass:
+    def __init__(self):
+        self.created_tasks = []
+
+    def async_create_task(self, coroutine, _name):
+        task = asyncio.create_task(coroutine)
+        self.created_tasks.append(task)
+        return task
+
+
+def _state(attributes):
+    return types.SimpleNamespace(attributes=attributes)
+
+
+def _state_event(old_state, new_state):
+    return types.SimpleNamespace(
+        data={"old_state": old_state, "new_state": new_state}
+    )
+
+
 class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_ingest_once_then_duplicate_rejected(self):
         queue = events.EventQueue()
 
-        async def ingest(event):
+        async def ingest(event, _allow_automatic_wake=True):
             return 1 if queue.enqueue(event) else 0
 
         listener = bridge.NotificationBridge(
@@ -188,7 +209,7 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(queue.enqueue(source))
         queue.remove(source.event_id)
 
-        async def ingest(event):
+        async def ingest(event, _allow_automatic_wake=True):
             return 1 if queue.enqueue(event) else 0
 
         listener = bridge.NotificationBridge(
@@ -199,6 +220,7 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             await listener.async_process_attributes(
                 REAL_NOTIFICATION,
                 observed_at=observed_at,
+                allow_stale_repost=True,
             )
         )
         self.assertEqual(len(queue.pending), 1)
@@ -223,7 +245,10 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(queue.enqueue(source))
         queue.remove(source.event_id)
 
-        async def ingest(event):
+        calls = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            calls.append((event.event_id, allow_automatic_wake))
             return 1 if queue.enqueue(event) else 0
 
         listener = bridge.NotificationBridge(
@@ -234,22 +259,306 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             await listener.async_process_attributes(
                 REAL_NOTIFICATION,
                 observed_at=observed_at,
+                allow_stale_repost=True,
             )
         )
         self.assertFalse(
             await listener.async_process_attributes(
                 REAL_NOTIFICATION,
                 observed_at=observed_at + timedelta(seconds=5),
+                allow_stale_repost=True,
             )
         )
         self.assertEqual(listener.stale_repost_promoted_count, 1)
         self.assertEqual(listener.stale_repost_suppressed_count, 1)
         self.assertEqual(len(queue.pending), 1)
+        self.assertEqual(
+            [allow_wake for _event_id, allow_wake in calls],
+            [False, True, False],
+        )
+
+    async def test_direct_stale_duplicate_does_not_promote_without_provenance(self):
+        source = bridge.notification_event_from_attributes(
+            REAL_NOTIFICATION, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None and source.notification_post_time is not None
+        queue = events.EventQueue()
+        self.assertTrue(queue.enqueue(source))
+        queue.remove(source.event_id)
+
+        calls = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            calls.append((event.event_id, allow_automatic_wake))
+            return 1 if queue.enqueue(event) else 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(), "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        self.assertFalse(
+            await listener.async_process_attributes(
+                REAL_NOTIFICATION,
+                observed_at=source.notification_post_time + timedelta(hours=26),
+            )
+        )
+        self.assertEqual(listener.stale_repost_promoted_count, 0)
+        self.assertEqual(queue.pending, ())
+        self.assertEqual(calls, [(source.event_id, False)])
+
+    async def test_initial_old_processed_state_does_not_repost_or_wake(self):
+        source = bridge.notification_event_from_attributes(
+            REAL_NOTIFICATION, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None
+        queue = events.EventQueue()
+        self.assertTrue(queue.enqueue(source))
+        queue.remove(source.event_id)
+        calls = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            calls.append((event.event_id, allow_automatic_wake))
+            return 1 if queue.enqueue(event) else 0
+
+        hass = _AsyncFakeHass()
+        listener = bridge.NotificationBridge(
+            hass,
+            "sensor.phone_last_notification",
+            "atv",
+            "camera-1",
+            ingest,
+            initial_event=source,
+        )
+        listener._handle_state_change(_state_event(None, _state(REAL_NOTIFICATION)))
+        await asyncio.gather(*hass.created_tasks)
+        self.assertEqual(calls, [(source.event_id, False)])
+        self.assertEqual(queue.pending, ())
+        self.assertEqual(listener.stale_repost_promoted_count, 0)
+        self.assertFalse(listener.last_event_queued)
+
+    async def test_initial_unseen_stale_state_is_retained_without_wake(self):
+        stale_time = datetime.now(UTC) - timedelta(hours=26)
+        attributes = {
+            **REAL_NOTIFICATION,
+            "post_time": round(stale_time.timestamp() * 1000),
+        }
+        queue = events.EventQueue()
+        wake_permissions = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            wake_permissions.append(allow_automatic_wake)
+            return 1 if queue.enqueue(event) else 0
+
+        hass = _AsyncFakeHass()
+        listener = bridge.NotificationBridge(
+            hass, "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        listener._handle_state_change(_state_event(None, _state(attributes)))
+        await asyncio.gather(*hass.created_tasks)
+        self.assertEqual(len(queue.pending), 1)
+        self.assertEqual(wake_permissions, [False])
+        self.assertEqual(listener.stale_repost_promoted_count, 0)
+
+    async def test_initial_unseen_fresh_state_is_accepted_with_wake_permission(self):
+        fresh_time = datetime.now(UTC) - timedelta(seconds=5)
+        attributes = {
+            **REAL_NOTIFICATION,
+            "post_time": round(fresh_time.timestamp() * 1000),
+        }
+        queue = events.EventQueue()
+        wake_permissions = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            wake_permissions.append(allow_automatic_wake)
+            return 1 if queue.enqueue(event) else 0
+
+        hass = _AsyncFakeHass()
+        listener = bridge.NotificationBridge(
+            hass, "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        listener._handle_state_change(_state_event(None, _state(attributes)))
+        await asyncio.gather(*hass.created_tasks)
+        self.assertEqual(len(queue.pending), 1)
+        self.assertEqual(wake_permissions, [True])
+        self.assertEqual(listener.stale_repost_promoted_count, 0)
+
+    async def test_runtime_same_source_update_can_promote_one_stale_repost(self):
+        stale_time = datetime.now(UTC) - timedelta(hours=26)
+        attributes = {
+            **REAL_NOTIFICATION,
+            "post_time": round(stale_time.timestamp() * 1000),
+        }
+        source = bridge.notification_event_from_attributes(
+            attributes, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None
+        queue = events.EventQueue()
+        self.assertTrue(queue.enqueue(source))
+        queue.remove(source.event_id)
+
+        calls = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            calls.append((event.event_id, allow_automatic_wake))
+            return 1 if queue.enqueue(event) else 0
+
+        hass = _AsyncFakeHass()
+        listener = bridge.NotificationBridge(
+            hass, "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        listener._handle_state_change(
+            _state_event(_state(attributes), _state(attributes))
+        )
+        await asyncio.gather(*hass.created_tasks)
+        self.assertEqual(len(queue.pending), 1)
+        self.assertTrue(queue.pending[0].event_id.startswith("android-repost:"))
+        self.assertEqual(listener.stale_repost_promoted_count, 1)
+        self.assertEqual(calls[0], (source.event_id, False))
+        self.assertTrue(calls[1][0].startswith("android-repost:"))
+        self.assertTrue(calls[1][1])
+
+    async def test_runtime_unseen_stale_source_only_wakes_promoted_repost(self):
+        stale_time = datetime.now(UTC) - timedelta(hours=26)
+        attributes = {
+            **REAL_NOTIFICATION,
+            "post_time": round(stale_time.timestamp() * 1000),
+        }
+        source = bridge.notification_event_from_attributes(
+            attributes, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None
+        queue = events.EventQueue()
+        calls = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            calls.append((event.event_id, allow_automatic_wake))
+            return 1 if queue.enqueue(event) else 0
+
+        hass = _AsyncFakeHass()
+        listener = bridge.NotificationBridge(
+            hass, "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        listener._handle_state_change(
+            _state_event(_state(attributes), _state(attributes))
+        )
+        await asyncio.gather(*hass.created_tasks)
+
+        self.assertEqual(len(queue.pending), 2)
+        self.assertEqual(calls[0], (source.event_id, False))
+        self.assertTrue(calls[1][0].startswith("android-repost:"))
+        self.assertTrue(calls[1][1])
+        self.assertEqual(sum(allow_wake for _event_id, allow_wake in calls), 1)
+        self.assertEqual(listener.stale_repost_promoted_count, 1)
+
+    async def test_runtime_repost_candidate_never_creates_two_wake_attempts(self):
+        observed_at = datetime.now(UTC)
+        attributes = {
+            **REAL_NOTIFICATION,
+            "post_time": round(
+                (observed_at - timedelta(seconds=400)).timestamp() * 1000
+            ),
+        }
+        source = bridge.notification_event_from_attributes(
+            attributes, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None
+        queue = events.EventQueue()
+        calls = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            calls.append((event.event_id, allow_automatic_wake))
+            return 1 if queue.enqueue(event) else 0
+
+        listener = bridge.NotificationBridge(
+            _FakeHass(), "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        self.assertTrue(
+            await listener.async_process_attributes(
+                attributes,
+                observed_at=observed_at,
+                allow_stale_repost=True,
+                allow_automatic_wake=True,
+            )
+        )
+
+        self.assertEqual(len(queue.pending), 2)
+        self.assertEqual(calls[0], (source.event_id, False))
+        self.assertTrue(calls[1][0].startswith("android-repost:"))
+        self.assertTrue(calls[1][1])
+        self.assertEqual(sum(allow_wake for _event_id, allow_wake in calls), 1)
+
+    async def test_restored_telemetry_does_not_debounce_first_runtime_repost(self):
+        stale_time = datetime.now(UTC) - timedelta(hours=26)
+        attributes = {
+            **REAL_NOTIFICATION,
+            "post_time": round(stale_time.timestamp() * 1000),
+        }
+        source = bridge.notification_event_from_attributes(
+            attributes, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None
+        queue = events.EventQueue()
+        self.assertTrue(queue.enqueue(source))
+
+        calls = []
+
+        async def ingest(event, allow_automatic_wake=True):
+            calls.append((event.event_id, allow_automatic_wake))
+            return 1 if queue.enqueue(event) else 0
+
+        hass = _AsyncFakeHass()
+        listener = bridge.NotificationBridge(
+            hass,
+            "sensor.phone_last_notification",
+            "atv",
+            "camera-1",
+            ingest,
+            initial_event=source,
+        )
+        listener._handle_state_change(
+            _state_event(_state(attributes), _state(attributes))
+        )
+        await asyncio.gather(*hass.created_tasks)
+        self.assertEqual(len(queue.pending), 2)
+        self.assertTrue(queue.pending[-1].event_id.startswith("android-repost:"))
+        self.assertEqual(listener.stale_repost_promoted_count, 1)
+        self.assertEqual(
+            [allow_wake for _event_id, allow_wake in calls],
+            [False, True],
+        )
+
+    async def test_unrelated_runtime_update_does_not_enable_stale_promotion(self):
+        source = bridge.notification_event_from_attributes(
+            REAL_NOTIFICATION, expected_device_name="atv", uid="camera-1"
+        )
+        assert source is not None
+        queue = events.EventQueue()
+        self.assertTrue(queue.enqueue(source))
+        queue.remove(source.event_id)
+
+        async def ingest(event, _allow_automatic_wake=True):
+            return 1 if queue.enqueue(event) else 0
+
+        hass = _AsyncFakeHass()
+        listener = bridge.NotificationBridge(
+            hass, "sensor.phone_last_notification", "atv", "camera-1", ingest
+        )
+        unrelated = {
+            "package": "com.example.other",
+            "android.title": "Other",
+            "android.text": "Not Reolink",
+            "post_time": 1786709130000,
+        }
+        listener._handle_state_change(
+            _state_event(_state(unrelated), _state(REAL_NOTIFICATION))
+        )
+        await asyncio.gather(*hass.created_tasks)
+        self.assertEqual(queue.pending, ())
+        self.assertEqual(listener.stale_repost_promoted_count, 0)
 
     async def test_non_reolink_notification_never_calls_ingest(self):
         calls = []
 
-        async def ingest(event):
+        async def ingest(event, _allow_automatic_wake=True):
             calls.append(event)
             return 1
 
@@ -263,7 +572,7 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_unrelated_notification_does_not_erase_last_reolink_telemetry(self):
         queue = events.EventQueue()
 
-        async def ingest(event):
+        async def ingest(event, _allow_automatic_wake=True):
             return 1 if queue.enqueue(event) else 0
 
         listener = bridge.NotificationBridge(
@@ -291,7 +600,7 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_beta29_tracks_sensor_updates_and_post_time_changes(self):
         queue = events.EventQueue()
 
-        async def ingest(event):
+        async def ingest(event, _allow_automatic_wake=True):
             return 1 if queue.enqueue(event) else 0
 
         listener = bridge.NotificationBridge(
@@ -325,7 +634,7 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_beta29_counts_unrelated_sensor_update_without_overwriting_match(self):
         queue = events.EventQueue()
 
-        async def ingest(event):
+        async def ingest(event, _allow_automatic_wake=True):
             return 1 if queue.enqueue(event) else 0
 
         listener = bridge.NotificationBridge(
@@ -353,7 +662,7 @@ class RuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         )
         assert event is not None
 
-        async def ingest(_event):
+        async def ingest(_event, _allow_automatic_wake=True):
             return 0
 
         listener = bridge.NotificationBridge(

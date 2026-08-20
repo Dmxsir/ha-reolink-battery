@@ -1,8 +1,8 @@
 """Regression guards for beta.42 fresh-first queue scheduling."""
 
-from pathlib import Path
 import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 WORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"
@@ -20,12 +20,11 @@ class Beta42FreshFirstQueueTests(unittest.TestCase):
         self.assertIn("event.notification_post_time or event.alarm_time", source)
         self.assertNotIn("def _oldest_android_event", source)
 
-    def test_new_notification_rearms_deferred_backlog(self):
+    def test_new_notification_activates_only_its_event(self):
         source = WORKER.read_text()
         notify = source[source.index("    def notify"):source.index("    async def async_shutdown")]
-        self.assertIn("self._deferred_event_ids.clear()", notify)
-        self.assertIn("self.state.deferred_count = 0", notify)
-        self.assertIn("self.state.deferred_rearmed_count += 1", notify)
+        self.assertIn("self._activated_event_ids.add(event_id)", notify)
+        self.assertNotIn(".clear()", notify)
 
     def test_wake_and_download_protocol_contracts_are_unchanged(self):
         transport = TRANSPORT.read_text()
@@ -39,11 +38,10 @@ class Beta42FreshFirstQueueTests(unittest.TestCase):
 
     def test_diagnostics_and_version(self):
         diagnostics = DIAGNOSTICS.read_text()
-        self.assertIn('"selection_policy": "newest_pending_first"', diagnostics)
-        self.assertIn('"deferred_rearm_policy": "new_notification"', diagnostics)
+        self.assertIn('"selection_policy": "newest_activated_fresh_first"', diagnostics)
+        self.assertIn('"deferred_rearm_policy": "explicit_only"', diagnostics)
         version = json.loads(MANIFEST.read_text())["version"]
-        self.assertTrue(version.startswith("0.1.2-beta."))
-        self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 42)
+        self.assertEqual(version, "1.3.7")
 
 
 if __name__ == "__main__":

@@ -9,9 +9,10 @@ import sys
 import types
 import unittest
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import ClassVar
 
 ROOT = Path(__file__).parents[1]
 COMPONENT = ROOT / "custom_components" / "reolink_battery"
@@ -22,6 +23,7 @@ class _Value(StrEnum):
     SENSOR = "sensor"
     BINARY_SENSOR = "binary_sensor"
     BUTTON = "button"
+    CAMERA = "camera"
     BATTERY = "battery"
     BATTERY_CHARGING = "battery_charging"
     DATA_SIZE = "data_size"
@@ -31,6 +33,7 @@ class _Value(StrEnum):
     DIAGNOSTIC = "diagnostic"
     BYTES = "B"
     GIGABYTES = "GB"
+    STREAM = "stream"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -75,6 +78,78 @@ class _Store:
 
     async def async_save(self, value):
         self.saved.append(value)
+
+
+@dataclass
+class _CloudTokens:
+    access_token: str = ""
+    refresh_token: str = ""
+    mfa_trust_token: str = ""
+    user_id: str = ""
+    expires_at: float = 0
+
+
+class _FakeCoordinator:
+    pending_seed: ClassVar[tuple] = ()
+    deferred_seed: ClassVar[dict[str, object]] = {}
+
+    def __init__(self, *_args, **_kwargs):
+        self.pending_events = tuple(self.pending_seed)
+        self._deferred = dict(self.deferred_seed)
+        self.completed_recording_fingerprints = frozenset()
+        self.stopped = False
+
+    @property
+    def deferred_event_count(self):
+        return len(self._deferred)
+
+    @property
+    def deferred_event_ids(self):
+        return frozenset(self._deferred)
+
+    @property
+    def last_deferred_event(self):
+        return max(
+            self._deferred.values(),
+            key=lambda item: item.deferred_at,
+            default=None,
+        )
+
+    def is_event_deferred(self, event_id):
+        return event_id in self._deferred
+
+    async def async_initialize(self):
+        return None
+
+    async def async_run(self):
+        return None
+
+    async def async_shutdown(self):
+        self.stopped = True
+
+    async def async_ingest_events(self, incoming):
+        existing = {event.event_id for event in self.pending_events}
+        accepted = [event for event in incoming if event.event_id not in existing]
+        self.pending_events += tuple(accepted)
+        return len(accepted)
+
+    async def async_defer_event(self, event_id, reason, *, deferred_at=None):
+        if event_id not in {event.event_id for event in self.pending_events}:
+            return False
+        self._deferred[event_id] = types.SimpleNamespace(
+            event_id=event_id,
+            reason=reason,
+            deferred_at=deferred_at or datetime.now(UTC),
+        )
+        return True
+
+    async def async_complete_event(self, event_id, *, completed_recording=None):
+        before = len(self.pending_events)
+        self.pending_events = tuple(
+            event for event in self.pending_events if event.event_id != event_id
+        )
+        self._deferred.pop(event_id, None)
+        return len(self.pending_events) != before
 
 
 class _Registry:
@@ -144,6 +219,9 @@ def install_stubs() -> None:
     const.UnitOfInformation = _Value
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
+    core.Event = object
+    core.State = object
+    core.callback = lambda func: func
     helpers = types.ModuleType("homeassistant.helpers")
     aiohttp_client = types.ModuleType("homeassistant.helpers.aiohttp_client")
     aiohttp_client.async_get_clientsession = lambda _hass: object()
@@ -157,6 +235,10 @@ def install_stubs() -> None:
     exceptions.HomeAssistantError = type("HomeAssistantError", (Exception,), {})
     storage = types.ModuleType("homeassistant.helpers.storage")
     storage.Store = _Store
+    helper_event = types.ModuleType("homeassistant.helpers.event")
+    helper_event.async_track_state_change_event = (
+        lambda *_args, **_kwargs: lambda: None
+    )
     sys.modules.update(
         {
             "homeassistant": homeassistant,
@@ -173,7 +255,89 @@ def install_stubs() -> None:
             "homeassistant.helpers.entity_registry": entity_registry,
             "homeassistant.helpers.entity": entity,
             "homeassistant.helpers.storage": storage,
+            "homeassistant.helpers.event": helper_event,
             "homeassistant.exceptions": exceptions,
+        }
+    )
+
+    cloud = types.ModuleType(f"{PACKAGE}.cloud")
+    cloud.CloudTokens = _CloudTokens
+    cloud.ReolinkCloudClient = lambda _session: object()
+    coordinator = types.ModuleType(f"{PACKAGE}.coordinator")
+    coordinator.ReolinkBatteryCoordinator = _FakeCoordinator
+
+    class _LiveHub:
+        is_active = False
+
+        def __init__(self, _hass, _entry):
+            pass
+
+        async def async_stop(self):
+            return None
+
+    live_http = types.ModuleType(f"{PACKAGE}.live_http")
+    live_http.ReolinkBatteryLiveHub = _LiveHub
+    live_http.ReolinkBatteryAacView = type("ReolinkBatteryAacView", (), {})
+    live_http.ReolinkBatteryH264View = type("ReolinkBatteryH264View", (), {})
+
+    async def async_ensure_go2rtc_bridge(_hass, _entry):
+        return types.SimpleNamespace(rtsp_url=None)
+
+    go2rtc = types.ModuleType(f"{PACKAGE}.go2rtc_bridge")
+    go2rtc.async_ensure_go2rtc_bridge = async_ensure_go2rtc_bridge
+
+    async def async_not_available(*_args, **_kwargs):
+        raise AssertionError("recording protocol must not run during setup")
+
+    def unused_state(*_args, **_kwargs):
+        return types.SimpleNamespace()
+
+    recording_download = types.ModuleType(
+        f"{PACKAGE}.recording_download_beta22"
+    )
+    recording_download.apply_file_info_trace = lambda *_args: None
+    recording_download.apply_identity_trace = lambda *_args: None
+    recording_download.apply_stream_probe_trace = lambda *_args: None
+    recording_download.async_prepare_download_for_event = async_not_available
+    recording_download.download_prepare_state = unused_state
+    recording_download.reset_stream_probe_state = lambda *_args: None
+
+    recording_probe = types.ModuleType(f"{PACKAGE}.recording_probe")
+    recording_probe.async_find_recording_for_event = async_not_available
+    recording_probe.probe_state = unused_state
+
+    class _SyntheticCamera(_Entity):
+        _attr_should_poll = False
+
+        def __init__(self, entry):
+            self._attr_unique_id = f"{entry.data['uid']}_live_view"
+
+    async def async_setup_camera(_hass, entry, async_add_entities):
+        async_add_entities((_SyntheticCamera(entry),))
+
+    class CameraStageError(RuntimeError):
+        def __init__(self, stage):
+            super().__init__(stage)
+            self.stage = stage
+
+    async def async_validate_legacy_device(*_args, **_kwargs):
+        camera.local_session_open_count += 1
+        raise AssertionError("setup must not open a local camera session")
+
+    camera = types.ModuleType(f"{PACKAGE}.camera")
+    camera.CameraStageError = CameraStageError
+    camera.async_setup_entry = async_setup_camera
+    camera.async_validate_legacy_device = async_validate_legacy_device
+    camera.local_session_open_count = 0
+    sys.modules.update(
+        {
+            f"{PACKAGE}.cloud": cloud,
+            f"{PACKAGE}.coordinator": coordinator,
+            f"{PACKAGE}.live_http": live_http,
+            f"{PACKAGE}.go2rtc_bridge": go2rtc,
+            f"{PACKAGE}.recording_download_beta22": recording_download,
+            f"{PACKAGE}.recording_probe": recording_probe,
+            f"{PACKAGE}.camera": camera,
         }
     )
 
@@ -190,6 +354,7 @@ sys.modules[PACKAGE] = integration
 spec.loader.exec_module(integration)
 const = importlib.import_module(f"{PACKAGE}.const")
 status = importlib.import_module(f"{PACKAGE}.device_status")
+event_model = importlib.import_module(f"{PACKAGE}.events")
 
 
 class _ConfigEntries:
@@ -222,13 +387,17 @@ class _ConfigEntries:
 class _Hass:
     def __init__(self):
         self.config_entries = _ConfigEntries()
+        self.data = {}
+        self.http = types.SimpleNamespace(register_view=lambda _view: None)
 
 
 class _Entry(_ConfigEntry):
-    def __init__(self, hass, data):
+    def __init__(self, hass, data, *, options=None):
         self.hass = hass
         self.entry_id = "entry-1"
+        self.title = "Synthetic Argus"
         self.data = data
+        self.options = options or {}
         self.runtime_data = None
         self.background_tasks = []
 
@@ -265,7 +434,7 @@ class IntegrationLoadTests(unittest.IsolatedAsyncioTestCase):
             wifi_rssi_dbm=wifi,
         )
 
-    def _entry(self, hass, local=None):
+    def _entry(self, hass, local=None, *, notification_bridge=False):
         data = {
             const.CONF_ACCOUNT_EMAIL: "account@example.invalid",
             const.CONF_ACCOUNT_PASSWORD: "unused",
@@ -283,7 +452,24 @@ class IntegrationLoadTests(unittest.IsolatedAsyncioTestCase):
         }
         if local is not None:
             data[const.CONF_LOCAL_STATE] = status.local_state_as_dict(local)
-        return _Entry(hass, data)
+        options = (
+            {const.CONF_NOTIFICATION_ENTITY: "sensor.phone_last_notification"}
+            if notification_bridge
+            else {}
+        )
+        return _Entry(hass, data, options=options)
+
+    @staticmethod
+    def _android_event(event_id, event_time):
+        return event_model.CloudEvent(
+            event_id=event_id,
+            uid="camera-1",
+            alarm_time=event_time,
+            alarm_type="MOTION",
+            source="android_notification",
+            device_name="Front camera",
+            notification_post_time=event_time,
+        )
 
     @staticmethod
     def _button(hass):
@@ -307,13 +493,14 @@ class IntegrationLoadTests(unittest.IsolatedAsyncioTestCase):
         return CameraStageError
 
     async def asyncTearDown(self):
-        sys.modules.pop(f"{PACKAGE}.camera", None)
+        install_stubs()
+        _FakeCoordinator.pending_seed = ()
+        _FakeCoordinator.deferred_seed = {}
 
     async def test_setup_and_unload_restore_cache_without_camera_polling(self):
         hass = _Hass()
         local = self._local_state()
         entry = self._entry(hass, local)
-        sys.modules.pop(f"{PACKAGE}.camera", None)
         ENTITY_REGISTRY.entries = {
             f"sensor.front_camera_{key}": types.SimpleNamespace(
                 unique_id=f"camera-1_{key}",
@@ -331,9 +518,9 @@ class IntegrationLoadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await integration.async_setup_entry(hass, entry))
         self.assertEqual(
             hass.config_entries.forwarded,
-            (_Value.SENSOR, _Value.BINARY_SENSOR, _Value.BUTTON),
+            (_Value.SENSOR, _Value.BINARY_SENSOR, _Value.BUTTON, _Value.CAMERA),
         )
-        self.assertEqual(len(hass.config_entries.entities), 8)
+        self.assertEqual(len(hass.config_entries.entities), 11)
         self.assertEqual(entry.runtime_data.status.state.local, local)
         self.assertTrue(
             all(
@@ -342,7 +529,10 @@ class IntegrationLoadTests(unittest.IsolatedAsyncioTestCase):
                 for registry_entry in ENTITY_REGISTRY.entries.values()
             )
         )
-        self.assertNotIn(f"{PACKAGE}.camera", sys.modules)
+        self.assertEqual(
+            sys.modules[f"{PACKAGE}.camera"].local_session_open_count,
+            0,
+        )
         self.assertTrue(
             all(
                 entity._attr_should_poll is False
@@ -362,7 +552,56 @@ class IntegrationLoadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await integration.async_unload_entry(hass, entry))
         self.assertEqual(
             hass.config_entries.unloaded,
-            (_Value.SENSOR, _Value.BINARY_SENSOR, _Value.BUTTON),
+            (_Value.SENSOR, _Value.BINARY_SENSOR, _Value.BUTTON, _Value.CAMERA),
+        )
+
+    async def test_setup_skips_stale_and_deferred_android_backlog(self):
+        now = datetime.now(UTC)
+        deferred = self._android_event("deferred", now - timedelta(minutes=2))
+        stale = self._android_event("stale", now - timedelta(minutes=20))
+        _FakeCoordinator.pending_seed = (deferred, stale)
+        _FakeCoordinator.deferred_seed = {
+            deferred.event_id: types.SimpleNamespace(
+                event_id=deferred.event_id,
+                reason="automatic_retries_exhausted",
+                deferred_at=now - timedelta(minutes=1),
+            )
+        }
+        hass = _Hass()
+        entry = self._entry(hass, notification_bridge=True)
+
+        self.assertTrue(await integration.async_setup_entry(hass, entry))
+
+        worker = entry.runtime_data.recording_worker
+        self.assertIsNotNone(worker)
+        self.assertFalse(worker.state.pending_trigger)
+        self.assertEqual(worker.state.attempts, 0)
+        self.assertEqual(
+            entry.runtime_data.coordinator.deferred_event_ids,
+            frozenset({deferred.event_id, stale.event_id}),
+        )
+        self.assertEqual(
+            sys.modules[f"{PACKAGE}.camera"].local_session_open_count,
+            0,
+        )
+
+    async def test_setup_activates_one_fresh_startup_recovery_without_camera(self):
+        now = datetime.now(UTC)
+        fresh = self._android_event("fresh", now - timedelta(seconds=30))
+        _FakeCoordinator.pending_seed = (fresh,)
+        hass = _Hass()
+        entry = self._entry(hass, notification_bridge=True)
+
+        self.assertTrue(await integration.async_setup_entry(hass, entry))
+
+        worker = entry.runtime_data.recording_worker
+        self.assertIsNotNone(worker)
+        self.assertTrue(worker.state.pending_trigger)
+        self.assertEqual(worker._activated_event_ids, {fresh.event_id})
+        self.assertEqual(worker.state.attempts, 0)
+        self.assertEqual(
+            sys.modules[f"{PACKAGE}.camera"].local_session_open_count,
+            0,
         )
 
     async def test_successful_press_updates_cache_and_entities_immediately(self):
@@ -372,7 +611,9 @@ class IntegrationLoadTests(unittest.IsolatedAsyncioTestCase):
         state_entities = [
             entity
             for entity in hass.config_entries.entities
-            if not entity._attr_unique_id.endswith("_refresh_device_status")
+            if entity.__class__.__module__.endswith(
+                (".sensor", ".binary_sensor")
+            )
         ]
         for entity in state_entities:
             await entity.async_added_to_hass()

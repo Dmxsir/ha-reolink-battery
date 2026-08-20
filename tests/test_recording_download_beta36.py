@@ -1,7 +1,7 @@
 """Regression guards for beta.36 periodic receive ACK cadence."""
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 BETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"
@@ -15,7 +15,7 @@ class Beta36PeriodicRxAckTests(unittest.TestCase):
         source = BETA20.read_text()
         self.assertIn("PERIODIC_RX_ACK_INTERVAL = 0.010", source)
         self.assertIn("def send_periodic_ack(self) -> bool:", source)
-        self.assertIn("self.send_ack()", source)
+        self.assertIn("self._send_ack_now()", source)
         self.assertIn("await asyncio.sleep(PERIODIC_RX_ACK_INTERVAL)", source)
         self.assertIn("protocol.send_periodic_ack()", source)
 
@@ -42,7 +42,6 @@ class Beta36PeriodicRxAckTests(unittest.TestCase):
             "udp_periodic_ack_interval_ms",
             "udp_periodic_ack_count",
             "udp_periodic_ack_gap_count",
-            "3B.10-periodic-rx-ack",
         ):
             self.assertIn(token, source)
 

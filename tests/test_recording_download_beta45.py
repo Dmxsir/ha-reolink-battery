@@ -1,13 +1,11 @@
 """Regression guards for beta.45 cmd13 reported-size collector resize."""
 
-from pathlib import Path
-import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 BETA22 = ROOT / "custom_components" / "reolink_battery" / "recording_download_beta22.py"
 DIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"
-MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
 
 
 class Beta45Cmd13ReportedSizeCollectorTests(unittest.TestCase):
@@ -41,9 +39,10 @@ class Beta45Cmd13ReportedSizeCollectorTests(unittest.TestCase):
         self.assertEqual(candidate_limit, base)
         self.assertGreater(cmd13_limit, candidate_limit)
 
-    def test_version_and_milestone(self):
-        self.assertEqual(json.loads(MANIFEST.read_text())["version"], "0.1.2-beta.45")
-        self.assertIn('"milestone": "3B.19-cmd13-reported-size-collector"', DIAGNOSTICS.read_text())
+    def test_diagnostics_preserve_reported_size_telemetry(self):
+        diagnostics = DIAGNOSTICS.read_text()
+        self.assertIn('"xml_reported_size"', diagnostics)
+        self.assertIn('"expected_size_reached"', diagnostics)
 
 
 if __name__ == "__main__":

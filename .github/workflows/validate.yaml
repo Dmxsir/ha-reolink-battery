@@ -22,6 +22,10 @@ jobs:
         run: python -m compileall -q custom_components/reolink_battery
       - name: Notification bridge regression tests
         run: python tests/test_notification_bridge.py
+      - name: Recording backlog policy regression tests
+        run: python tests/test_recording_backlog_policy.py
+      - name: Integration load and startup regression tests
+        run: python tests/test_integration_load.py
 
   validate-hacs:
     runs-on: ubuntu-latest

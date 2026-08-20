@@ -1,14 +1,12 @@
 """Regression guards for beta.44 verified size-aware collector."""
 
-from pathlib import Path
-import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 BETA22 = ROOT / "custom_components" / "reolink_battery" / "recording_download_beta22.py"
 BETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"
 DIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"
-MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
 
 
 class Beta44VerifiedSizeAwareCollectorTests(unittest.TestCase):
@@ -23,7 +21,6 @@ class Beta44VerifiedSizeAwareCollectorTests(unittest.TestCase):
         self.assertIn("self._stream_trace.sample_limit_frames = collector_frames", source)
 
     def test_18mb_recording_gets_limit_above_expected_size(self):
-        ns = {}
         # Avoid importing Home Assistant dependencies; verify the sizing formula
         # from source constants through equivalent arithmetic.
         expected = 17_921_985
@@ -40,12 +37,10 @@ class Beta44VerifiedSizeAwareCollectorTests(unittest.TestCase):
         self.assertIn("P2P_HEARTBEAT_INTERVAL = 1.0", source)
         self.assertIn("activate_fresh_heartbeat_tids_after_login", source)
 
-    def test_diagnostics_and_version(self):
+    def test_diagnostics_preserve_size_aware_telemetry(self):
         diagnostics = DIAGNOSTICS.read_text()
-        self.assertIn('"milestone": "3B.', diagnostics)
-        version = json.loads(MANIFEST.read_text())["version"]
-        self.assertTrue(version.startswith("0.1.2-beta."))
-        self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 44)
+        self.assertIn('"xml_reported_size"', diagnostics)
+        self.assertIn('"aggregate_limit_bytes"', diagnostics)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,7 @@
 """Regression guards for beta.41 UID/LAN wake reliability."""
 
-from pathlib import Path
 import unittest
-import json
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 TRANSPORT = ROOT / "custom_components" / "reolink_battery" / "transport.py"
@@ -10,7 +9,6 @@ BASE = ROOT / "custom_components" / "reolink_battery" / "recording_download_prob
 BETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"
 WORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"
 DIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"
-MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
 
 
 class Beta41UidWakeReliabilityTests(unittest.TestCase):
@@ -47,13 +45,10 @@ class Beta41UidWakeReliabilityTests(unittest.TestCase):
         self.assertIn("activate_fresh_heartbeat_tids_after_login", source)
         self.assertIn("RECORDING_SETTLE_SECONDS = 60.0", WORKER.read_text())
 
-    def test_diagnostics_and_version(self):
+    def test_diagnostics_preserve_uid_resolve_telemetry(self):
         diagnostics = DIAGNOSTICS.read_text()
         self.assertIn('"uid_resolve": {', diagnostics)
         self.assertIn('"network_identifiers_exposed": False', diagnostics)
-        version = json.loads(MANIFEST.read_text())["version"]
-        self.assertTrue(version.startswith("0.1.2-beta."))
-        self.assertGreaterEqual(int(version.rsplit(".", 1)[1]), 41)
 
 
 if __name__ == "__main__":

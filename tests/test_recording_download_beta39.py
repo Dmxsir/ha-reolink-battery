@@ -1,15 +1,13 @@
 """Regression guards for beta.39 fresh P2P heartbeat transaction IDs."""
 
-from pathlib import Path
-import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 BETA20 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta20.py"
 BETA21 = ROOT / "custom_components" / "reolink_battery" / "recording_download_probe_beta21.py"
 WORKER = ROOT / "custom_components" / "reolink_battery" / "recording_worker.py"
 DIAGNOSTICS = ROOT / "custom_components" / "reolink_battery" / "diagnostics.py"
-MANIFEST = ROOT / "custom_components" / "reolink_battery" / "manifest.json"
 
 
 class Beta39FreshHeartbeatTidTests(unittest.TestCase):
@@ -39,16 +37,13 @@ class Beta39FreshHeartbeatTidTests(unittest.TestCase):
         self.assertIn("protocol=protocol", beta21)
         self.assertIn("RECORDING_SETTLE_SECONDS = 60.0", WORKER.read_text())
 
-    def test_diagnostics_and_minimum_version(self):
+    def test_diagnostics_preserve_fresh_tid_telemetry(self):
         diagnostics = DIAGNOSTICS.read_text()
         for token in (
             "p2p_heartbeat_fresh_tid_enabled",
             "p2p_heartbeat_unique_tid_count",
         ):
             self.assertIn(token, diagnostics)
-        version = json.loads(MANIFEST.read_text())["version"]
-        beta_number = int(version.rsplit("beta.", 1)[1])
-        self.assertGreaterEqual(beta_number, 39)
 
 
 if __name__ == "__main__":

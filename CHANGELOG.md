@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.3.7 (unreleased) — Battery-safe motion backlog processing
+- Requires explicit post-start state-change provenance before a stale Android notification can be promoted to an `android-repost`; a stale deterministic source never wakes the camera, while only its callback-time promoted event may wake.
+- Persists automatic recording deferrals in the existing bounded event queue, backward-compatible with stored v1 data.
+- Activates only newly accepted events and never re-arms unrelated deferred backlog when a fresh notification arrives.
+- Limits automatic startup recovery to the newest non-deferred Android event no more than 10 minutes old; all other pre-existing events are retained and persistently deferred without contacting the camera.
+- Adds secret-safe backlog-policy diagnostics and deterministic regression coverage.
+- Keeps the 60-second settle delay, shared local-operation lock, recording fingerprint deduplication, ready-event contract and verified cmd13/cmd8 transport unchanged.
+
 ## Current stable release
 
 ### v1.2.1 — Recording deduplication
@@ -42,7 +50,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.2.1` is the stable public release line.
+- `v1.3.7` is the next stable patch release prepared from the v1.3.6 baseline.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
 - Refactor legacy beta-named modules only in a separate behavior-preserving cleanup after the stable release is proven.
