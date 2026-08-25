@@ -17,6 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify release checkpoint
+        run: python tests/test_release_checkpoint.py
+
       - name: Read integration version
         id: version
         shell: bash
