@@ -1,6 +1,13 @@
 # Changelog
 
-## v1.3.8 (unreleased) — Incomplete stream fast recovery
+## v1.3.9 (unreleased) — Partial idle-timeout fast recovery
+- Extends incomplete-stream recovery to the second real Argus failure signature: a valid MP4 transfer makes progress, remains smaller than the authoritative cmd13 size, then stalls until `idle_timeout` without an explicit remote disconnect.
+- Classifies that case as `STREAM_IDLE_TIMEOUT_INCOMPLETE` and applies the same 3/6-second battery-awake retry window introduced in v1.3.8.
+- Requires actual bytes written and an authoritative expected size larger than the partial file, so auth, FileInfo, routing, zero-byte and unrelated timeout failures retain the original 30/60-second policy.
+- Leaves the validated cmd13/cmd8 framing, heartbeat, periodic UDP ACK behavior, exact-size verification, newest-motion preemption and partial-file cleanup unchanged.
+- Adds deterministic regression coverage for the observed 1,261,568 / 9,314,178-byte `idle_timeout` signature.
+
+## v1.3.8 — Incomplete stream fast recovery
 - Detects the narrow failure where cmd13/cmd8 media transfer has started, MP4 bytes were written, the authoritative recording size is still larger than the collected file, and the Argus explicitly closes the P2P session.
 - Classifies that case as `STREAM_REMOTE_DISCONNECT_INCOMPLETE` instead of the generic `RECORDING_FILE_NOT_VERIFIED` failure.
 - Preserves the existing three-attempt bound but changes the remaining retry waits to 3 and 6 seconds after a confirmed partial remote disconnect, keeping retries inside the camera-awake window.
@@ -32,7 +39,7 @@
 - Verified end-to-end flow: Android/Reolink motion notification → Home Assistant queue → battery-camera wake/auth → FileInfo lookup → cmd13/cmd8 download → exact MP4 verification → Home Assistant recording-ready event → optional Telegram handoff.
 - Uses the authoritative recording size reported by accepted cmd13 to resize the verified download collector before cmd8, allowing verified recordings larger than the former 16 MiB ceiling while retaining the 128 MiB hard cap.
 - Keeps newest-first queue processing, bounded retry recovery, fresh-event retry preemption, persistent pending events, exact-size MP4 verification and atomic finalization.
-- `v0.1.2-beta.45` remains available as the diagnostic prerelease/reference baseline if deeper troubleshooting is required.
+- `v0.1.2-beta.45` remains available as a diagnostic prerelease/reference baseline if deeper troubleshooting is required.
 
 ## Retained diagnostic beta releases
 
@@ -58,7 +65,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.8` is the next stable patch release prepared from the v1.3.7 baseline.
+- `v1.3.9` is the next stable patch release prepared from the v1.3.8 baseline.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
 - Refactor legacy beta-named modules only in a separate behavior-preserving cleanup after the stable release is proven.
