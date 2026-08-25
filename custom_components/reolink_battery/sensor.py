@@ -7,18 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorEntityDescription,
-    SensorStateClass,
-)
-from homeassistant.const import (
-    PERCENTAGE,
-    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
-    EntityCategory,
-    UnitOfInformation,
-)
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
+from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, EntityCategory, UnitOfInformation
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import CONF_DEVICE_NAME, CONF_MODEL, CONF_UID, DOMAIN, MANUFACTURER
@@ -28,19 +18,13 @@ from .events import is_automatic_event_fresh
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
     from . import ReolinkBatteryConfigEntry
-
 
 DECIMAL_GIGABYTE = 1_000_000_000
 
 
 def _storage_value(name: str) -> Callable[[LocalState], float | None]:
-    return lambda state: (
-        getattr(state.storage, name) / DECIMAL_GIGABYTE
-        if state.storage is not None and getattr(state.storage, name) is not None
-        else None
-    )
+    return lambda state: getattr(state.storage, name) / DECIMAL_GIGABYTE if state.storage is not None and getattr(state.storage, name) is not None else None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -57,22 +41,17 @@ SENSORS = (
     ReolinkStatusSensorDescription(key="last_local_refresh", translation_key="last_local_refresh", device_class=SensorDeviceClass.TIMESTAMP, entity_category=EntityCategory.DIAGNOSTIC, value=lambda state: state.refreshed_at),
 )
 
-QUEUE_DESCRIPTION = SensorEntityDescription(
-    key="recordings_queued",
-    translation_key="recordings_queued",
-    state_class=SensorStateClass.MEASUREMENT,
-)
+QUEUE_DESCRIPTION = SensorEntityDescription(key="recordings_queued", translation_key="recordings_queued", state_class=SensorStateClass.MEASUREMENT)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ReolinkBatteryConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     entities: list[SensorEntity] = [ReolinkStatusSensor(entry, description) for description in SENSORS]
-    entities.append(ReolinkRecordingQueueSensor(entry))
+    if entry.runtime_data.recording_worker is not None:
+        entities.append(ReolinkRecordingQueueSensor(entry))
     async_add_entities(entities)
 
 
 class ReolinkStatusSensor(SensorEntity):
-    """Presentation-only view over the local-state cache."""
-
     _attr_has_entity_name = True
     _attr_should_poll = False
 
@@ -111,7 +90,6 @@ class ReolinkStatusSensor(SensorEntity):
 
 class ReolinkRecordingQueueSensor(SensorEntity):
     """Count pending Android recording events without contacting the camera."""
-
     _attr_has_entity_name = True
     _attr_should_poll = True
     _attr_icon = "mdi:video-outline"
