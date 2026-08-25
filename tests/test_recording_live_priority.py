@@ -18,6 +18,34 @@ class RecordingLivePriorityTests(unittest.TestCase):
         self.assertIn("self._stop_event.set()", source)
         self.assertIn("recording_preemptions", source)
 
+    def test_recording_preemption_preserves_http_consumers(self) -> None:
+        source = LIVE_HTTP.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        hub_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ReolinkBatteryLiveHub"
+        )
+        finish = next(
+            node
+            for node in hub_class.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_finish_producer"
+        )
+        segment = ast.get_source_segment(source, finish) or ""
+        self.assertIn(
+            "preserve_consumers = self._recording_priority_depth > 0", segment
+        )
+        self.assertIn("if preserve_consumers:", segment)
+        self.assertIn("self._recording_preserved_finishes += 1", segment)
+        self.assertIn("self._recording_preserved_consumers += consumers", segment)
+        self.assertIn("queue.put_nowait(None)", segment)
+        preserve_pos = segment.find("if preserve_consumers:")
+        else_pos = segment.find("else:", preserve_pos)
+        eof_pos = segment.find("queue.put_nowait(None)", else_pos)
+        self.assertGreater(else_pos, preserve_pos)
+        self.assertGreater(eof_pos, else_pos)
+
     def test_worker_wraps_base_attempt_with_live_priority(self) -> None:
         source = WORKER.read_text(encoding="utf-8")
         tree = ast.parse(source)
