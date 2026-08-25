@@ -65,6 +65,11 @@ class ReolinkBatteryLiveHub:
         self._last_failure_stage: str | None = None
         self._last_failure_type: str | None = None
         self._last_trace: LiveStreamTrace | None = None
+        # A recording attempt must be able to take the shared camera-operation
+        # lease from an arbitrarily long Live View session. While this depth is
+        # non-zero, subscriptions may queue but must not start a new producer.
+        self._recording_priority_depth = 0
+        self._recording_preemptions = 0
 
     @property
     def is_active(self) -> bool:
@@ -80,6 +85,9 @@ class ReolinkBatteryLiveHub:
             "audio_consumers": len(self._audio_queues),
             "sessions_started": self._sessions_started,
             "sessions_completed": self._sessions_completed,
+            "recording_priority_active": self._recording_priority_depth > 0,
+            "recording_priority_depth": self._recording_priority_depth,
+            "recording_preemptions": self._recording_preemptions,
             "last_failure_stage": self._last_failure_stage,
             "last_failure_type": self._last_failure_type,
             "last_session": (
@@ -120,7 +128,10 @@ class ReolinkBatteryLiveHub:
         async with self._guard:
             target = self._video_queues if kind == "video" else self._audio_queues
             target.add(queue)
-            if self._producer_task is None or self._producer_task.done():
+            if (
+                self._recording_priority_depth == 0
+                and (self._producer_task is None or self._producer_task.done())
+            ):
                 self._stop_event = asyncio.Event()
                 self._producer_task = asyncio.create_task(self._run_source())
         return queue
@@ -131,6 +142,47 @@ class ReolinkBatteryLiveHub:
             target.discard(queue)
             if not self._video_queues and not self._audio_queues and self._stop_event is not None:
                 self._stop_event.set()
+
+    async def async_pause_for_recording(self) -> bool:
+        """Stop Live View and block reconnects until the recording attempt ends.
+
+        Returns True when an active producer was asked to yield. The producer is
+        awaited outside the hub guard so its normal cleanup can acquire the same
+        guard. A bounded cancellation fallback prevents a broken Live View source
+        from starving the recording worker indefinitely.
+        """
+        task: asyncio.Task[None] | None
+        preempted = False
+        async with self._guard:
+            self._recording_priority_depth += 1
+            task = self._producer_task
+            if task is not None and not task.done():
+                preempted = True
+                self._recording_preemptions += 1
+                if self._stop_event is not None:
+                    self._stop_event.set()
+
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=8.0)
+            except TimeoutError:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        return preempted
+
+    async def async_resume_after_recording(self) -> None:
+        """Release one recording-priority hold and restart queued Live View."""
+        async with self._guard:
+            if self._recording_priority_depth > 0:
+                self._recording_priority_depth -= 1
+            if (
+                self._recording_priority_depth == 0
+                and (self._video_queues or self._audio_queues)
+                and (self._producer_task is None or self._producer_task.done())
+            ):
+                self._stop_event = asyncio.Event()
+                self._producer_task = asyncio.create_task(self._run_source())
 
     def _fanout(self, queues: set[asyncio.Queue[bytes | None]], payload: bytes) -> None:
         for queue in tuple(queues):

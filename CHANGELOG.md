@@ -1,6 +1,16 @@
 # Changelog
 
-## v1.3.9 (unreleased) — Partial idle-timeout fast recovery
+## v1.3.10 — Recording priority over Live View
+- Fixes a real field failure where a fresh recording event reached its 60-second settle point but then remained stuck for more than 17 minutes before UID discovery because an active Live View session held the shared `local_operation_lock`.
+- Adds an explicit recording-priority gate to the on-demand Live View hub. When a recording attempt is ready, an active Live View producer is asked to stop and yield the shared camera-operation lease.
+- Blocks new/reconnecting Live View producers while recording priority is active, preventing go2rtc from immediately reclaiming the lock before the recording worker can proceed.
+- Restarts queued Live View consumers after the recording attempt finishes; a Live View restart problem is not allowed to turn a successfully verified recording into a worker failure.
+- Adds secret-safe Live View diagnostics: `recording_priority_active`, `recording_priority_depth`, and `recording_preemptions`.
+- Keeps one local Baichuan session at a time; it does not open recording and Live View connections concurrently.
+- Leaves the validated recording transport unchanged: cmd13/cmd8 framing, heartbeat, periodic UDP ACK behavior, exact-size MP4 verification, partial-file cleanup, and the v1.3.8/v1.3.9 incomplete-stream 3/6-second recovery policy are unchanged.
+- Adds regression coverage for the recording-vs-Live-View priority contract.
+
+## v1.3.9 — Partial idle-timeout fast recovery
 - Extends incomplete-stream recovery to the second real Argus failure signature: a valid MP4 transfer makes progress, remains smaller than the authoritative cmd13 size, then stalls until `idle_timeout` without an explicit remote disconnect.
 - Classifies that case as `STREAM_IDLE_TIMEOUT_INCOMPLETE` and applies the same 3/6-second battery-awake retry window introduced in v1.3.8.
 - Requires actual bytes written and an authoritative expected size larger than the partial file, so auth, FileInfo, routing, zero-byte and unrelated timeout failures retain the original 30/60-second policy.
@@ -23,7 +33,7 @@
 - Adds secret-safe backlog-policy diagnostics and deterministic regression coverage.
 - Keeps the 60-second settle delay, shared local-operation lock, recording fingerprint deduplication, ready-event contract and verified cmd13/cmd8 transport unchanged.
 
-## Current stable release
+## Earlier stable releases
 
 ### v1.2.1 — Recording deduplication
 - Prevents duplicate Home Assistant/Telegram delivery when multiple Android Reolink notifications map to the same physical SD-card clip.
@@ -65,7 +75,8 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.9` is the next stable patch release prepared from the v1.3.8 baseline.
+- `v1.3.10` is the next stable patch release prepared from the v1.3.9 baseline.
+- Every version bump must include matching root/archive checkpoints before release.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
 - Refactor legacy beta-named modules only in a separate behavior-preserving cleanup after the stable release is proven.
