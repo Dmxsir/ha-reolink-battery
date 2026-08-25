@@ -1,10 +1,10 @@
-"""Cached local-status sensors; this platform never contacts the camera."""
+"""Cached local-status and recording-queue sensors; never wake the camera."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import (
@@ -23,6 +23,7 @@ from homeassistant.helpers.entity import DeviceInfo
 
 from .const import CONF_DEVICE_NAME, CONF_MODEL, CONF_UID, DOMAIN, MANUFACTURER
 from .device_status import LocalState
+from .events import is_automatic_event_fresh
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -106,13 +107,24 @@ SENSORS = (
     ),
 )
 
+QUEUE_DESCRIPTION = SensorEntityDescription(
+    key="recordings_queued",
+    translation_key="recordings_queued",
+    state_class=SensorStateClass.MEASUREMENT,
+    icon="mdi:video-outline",
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ReolinkBatteryConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    async_add_entities(ReolinkStatusSensor(entry, description) for description in SENSORS)
+    entities: list[SensorEntity] = [
+        ReolinkStatusSensor(entry, description) for description in SENSORS
+    ]
+    entities.append(ReolinkRecordingQueueSensor(entry))
+    async_add_entities(entities)
 
 
 class ReolinkStatusSensor(SensorEntity):
@@ -166,3 +178,55 @@ class ReolinkStatusSensor(SensorEntity):
         if info and info.hardware:
             values["hw_version"] = info.hardware
         return DeviceInfo(**values)
+
+
+class ReolinkRecordingQueueSensor(SensorEntity):
+    """Count pending Android recording events without contacting the camera."""
+
+    _attr_has_entity_name = True
+    # Polling only re-reads the in-memory persistent queue. It never contacts the
+    # cloud or camera, so the value stays current without adding a new wake path.
+    _attr_should_poll = True
+    entity_description = QUEUE_DESCRIPTION
+
+    def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_recordings_queued"
+
+    def _android_pending(self):
+        return [
+            event
+            for event in self._entry.runtime_data.coordinator.pending_events
+            if event.source == "android_notification"
+        ]
+
+    @property
+    def native_value(self) -> int:
+        return len(self._android_pending())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int]:
+        now = datetime.now(UTC)
+        coordinator = self._entry.runtime_data.coordinator
+        pending = self._android_pending()
+        return {
+            "deferred": sum(
+                coordinator.is_event_deferred(event.event_id) for event in pending
+            ),
+            "fresh_automatic": sum(
+                not coordinator.is_event_deferred(event.event_id)
+                and is_automatic_event_fresh(event, now)
+                for event in pending
+            ),
+            "stale": sum(
+                not is_automatic_event_fresh(event, now) for event in pending
+            ),
+        }
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._entry.data[CONF_UID])})
