@@ -9,66 +9,34 @@ from homeassistant.components.button import ButtonEntity, ButtonEntityDescriptio
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 
-from . import (
-    LocalStatusRefreshError,
-    ReolinkBatteryConfigEntry,
-    async_refresh_local_status,
-)
+from . import LocalStatusRefreshError, ReolinkBatteryConfigEntry, async_refresh_local_status
 from .camera import CameraStageError
-from .const import (
-    CONF_DEVICE_PASSWORD,
-    CONF_DEVICE_USERNAME,
-    CONF_INTERFACE,
-    CONF_UID,
-    DOMAIN,
-)
-from .recording_download_beta22 import (
-    apply_file_info_trace,
-    apply_identity_trace,
-    apply_stream_probe_trace,
-    async_prepare_download_for_event,
-    download_prepare_state,
-    reset_stream_probe_state,
-)
+from .const import CONF_DEVICE_PASSWORD, CONF_DEVICE_USERNAME, CONF_INTERFACE, CONF_UID, DOMAIN
+from .recording_download_beta22 import apply_file_info_trace, apply_identity_trace, apply_stream_probe_trace, async_prepare_download_for_event, download_prepare_state, reset_stream_probe_state
 from .recording_probe import async_find_recording_for_event, probe_state
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-
-REFRESH_DESCRIPTION = ButtonEntityDescription(
-    key="refresh_device_status",
-    translation_key="refresh_device_status",
-)
-FIND_RECORDING_DESCRIPTION = ButtonEntityDescription(
-    key="find_pending_recording",
-    translation_key="find_pending_recording",
-)
-PREPARE_DOWNLOAD_DESCRIPTION = ButtonEntityDescription(
-    key="prepare_pending_recording_download",
-    translation_key="prepare_pending_recording_download",
-)
+REFRESH_DESCRIPTION = ButtonEntityDescription(key="refresh_device_status", translation_key="refresh_device_status")
+FIND_RECORDING_DESCRIPTION = ButtonEntityDescription(key="find_pending_recording", translation_key="find_pending_recording")
+PREPARE_DOWNLOAD_DESCRIPTION = ButtonEntityDescription(key="prepare_pending_recording_download", translation_key="prepare_pending_recording_download")
+RECOVER_RECORDINGS_DESCRIPTION = ButtonEntityDescription(key="recover_pending_recordings", translation_key="recover_pending_recordings")
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ReolinkBatteryConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Add explicit short-session buttons."""
-    async_add_entities(
-        (
-            ReolinkRefreshDeviceStatusButton(entry),
-            ReolinkFindPendingRecordingButton(entry),
-            ReolinkPreparePendingRecordingDownloadButton(entry),
-        )
-    )
+async def async_setup_entry(hass: HomeAssistant, entry: ReolinkBatteryConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    entities: list[ButtonEntity] = [
+        ReolinkRefreshDeviceStatusButton(entry),
+        ReolinkFindPendingRecordingButton(entry),
+        ReolinkPreparePendingRecordingDownloadButton(entry),
+    ]
+    if entry.runtime_data.recording_worker is not None:
+        entities.append(ReolinkRecoverPendingRecordingsButton(entry))
+    async_add_entities(entities)
 
 
 class ReolinkRefreshDeviceStatusButton(ButtonEntity):
-    """Start one short status-only camera session on explicit press."""
-
     _attr_has_entity_name = True
     _attr_should_poll = False
     entity_description = REFRESH_DESCRIPTION
@@ -82,7 +50,6 @@ class ReolinkRefreshDeviceStatusButton(ButtonEntity):
         return DeviceInfo(identifiers={(DOMAIN, self._entry.data[CONF_UID])})
 
     async def async_press(self) -> None:
-        """Refresh cached local status once."""
         try:
             await async_refresh_local_status(self.hass, self._entry)
         except LocalStatusRefreshError as err:
@@ -90,8 +57,6 @@ class ReolinkRefreshDeviceStatusButton(ButtonEntity):
 
 
 class ReolinkFindPendingRecordingButton(ButtonEntity):
-    """Explicitly find the SD recording nearest the oldest pending phone event."""
-
     _attr_has_entity_name = True
     _attr_should_poll = False
     entity_description = FIND_RECORDING_DESCRIPTION
@@ -106,24 +71,12 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
     @property
     def available(self) -> bool:
-        return any(
-            event.source == "android_notification"
-            for event in self._entry.runtime_data.coordinator.pending_events
-        )
+        return any(event.source == "android_notification" for event in self._entry.runtime_data.coordinator.pending_events)
 
     async def async_press(self) -> None:
-        """Wake only on this explicit press, search one day, and close immediately."""
-        event = next(
-            (
-                item
-                for item in self._entry.runtime_data.coordinator.pending_events
-                if item.source == "android_notification"
-            ),
-            None,
-        )
+        event = next((item for item in self._entry.runtime_data.coordinator.pending_events if item.source == "android_notification"), None)
         if event is None:
             raise HomeAssistantError("NO_PENDING_NOTIFICATION_EVENT")
-
         state = probe_state(self._entry.entry_id)
         state.attempted = True
         state.success = False
@@ -134,21 +87,12 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
         state.candidate_distance_seconds = None
         state.candidate_name_present = False
         state.failure_stage = ""
-
         try:
             async with self._entry.runtime_data.local_operation_lock:
-                candidate = await async_find_recording_for_event(
-                    event,
-                    self._entry.data[CONF_UID],
-                    self._entry.data[CONF_DEVICE_USERNAME],
-                    self._entry.data[CONF_DEVICE_PASSWORD],
-                    ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]),
-                    self.hass.config.time_zone,
-                )
+                candidate = await async_find_recording_for_event(event, self._entry.data[CONF_UID], self._entry.data[CONF_DEVICE_USERNAME], self._entry.data[CONF_DEVICE_PASSWORD], ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]), self.hass.config.time_zone)
         except CameraStageError as err:
             state.failure_stage = err.stage
             raise HomeAssistantError(err.stage) from None
-
         state.success = True
         state.candidate_start = candidate.start_time
         state.candidate_end = candidate.end_time
@@ -158,17 +102,13 @@ class ReolinkFindPendingRecordingButton(ButtonEntity):
 
 
 class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
-    """Download and atomically save the verified full-high MP4."""
-
     _attr_has_entity_name = True
     _attr_should_poll = False
     entity_description = PREPARE_DOWNLOAD_DESCRIPTION
 
     def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
         self._entry = entry
-        self._attr_unique_id = (
-            f"{entry.data[CONF_UID]}_prepare_pending_recording_download"
-        )
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_prepare_pending_recording_download"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -176,24 +116,12 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
 
     @property
     def available(self) -> bool:
-        return any(
-            event.source == "android_notification"
-            for event in self._entry.runtime_data.coordinator.pending_events
-        )
+        return any(event.source == "android_notification" for event in self._entry.runtime_data.coordinator.pending_events)
 
     async def async_press(self) -> None:
-        """Find recording, download full-high MP4, verify, save, then close."""
-        event = next(
-            (
-                item
-                for item in self._entry.runtime_data.coordinator.pending_events
-                if item.source == "android_notification"
-            ),
-            None,
-        )
+        event = next((item for item in self._entry.runtime_data.coordinator.pending_events if item.source == "android_notification"), None)
         if event is None:
             raise HomeAssistantError("NO_PENDING_NOTIFICATION_EVENT")
-
         reset_stream_probe_state(self._entry.entry_id)
         state = download_prepare_state(self._entry.entry_id)
         state.attempted = True
@@ -258,31 +186,17 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.identity_used_exact_id = False
         state.identity_used_exact_file_name = False
         state.identity_used_exact_name = False
-
         try:
             async with self._entry.runtime_data.local_operation_lock:
-                result = await async_prepare_download_for_event(
-                    event,
-                    self._entry.data[CONF_UID],
-                    self._entry.data[CONF_DEVICE_USERNAME],
-                    self._entry.data[CONF_DEVICE_PASSWORD],
-                    ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]),
-                    self.hass.config.time_zone,
-                    output_dir=self.hass.config.path("reolink_battery", "recordings"),
-                    telemetry_owner="manual",
-                    telemetry_event_time=event.notification_post_time or event.alarm_time,
-                )
+                result = await async_prepare_download_for_event(event, self._entry.data[CONF_UID], self._entry.data[CONF_DEVICE_USERNAME], self._entry.data[CONF_DEVICE_PASSWORD], ipaddress.ip_interface(self._entry.data[CONF_INTERFACE]), self.hass.config.time_zone, output_dir=self.hass.config.path("reolink_battery", "recordings"), telemetry_owner="manual", telemetry_event_time=event.notification_post_time or event.alarm_time)
         except CameraStageError as err:
-            apply_stream_probe_trace(
-                self._entry.entry_id, getattr(err, "stream_trace", None)
-            )
+            apply_stream_probe_trace(self._entry.entry_id, getattr(err, "stream_trace", None))
             state.failure_stage = err.stage
             state.failure_type = getattr(err, "failure_type", "")
             response_code = getattr(err, "response_code", None)
             state.response_code = response_code if isinstance(response_code, int) else None
             apply_file_info_trace(state, getattr(err, "file_info_trace", None))
             raise HomeAssistantError(err.stage) from None
-
         apply_stream_probe_trace(self._entry.entry_id, result.stream_trace)
         apply_file_info_trace(state, result.file_info_trace)
         apply_identity_trace(state, result.identity_trace)
@@ -306,9 +220,35 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
         state.response_payload_offset = result.response.payload_offset
         state.first_payload_length = result.response.payload_length
         state.success = result.response_accepted
-
         if not result.response_accepted:
-            state.failure_stage = (
-                f"DOWNLOAD_PREPARE_RESPONSE_{result.response.response_code}"
-            )
+            state.failure_stage = f"DOWNLOAD_PREPARE_RESPONSE_{result.response.response_code}"
             raise HomeAssistantError(state.failure_stage)
+
+
+class ReolinkRecoverPendingRecordingsButton(ButtonEntity):
+    """Explicitly rearm and process all pending Android recording events."""
+    _attr_has_entity_name = True
+    _attr_should_poll = True
+    _attr_icon = "mdi:download-multiple"
+    entity_description = RECOVER_RECORDINGS_DESCRIPTION
+
+    def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_recover_pending_recordings"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._entry.data[CONF_UID])})
+
+    @property
+    def available(self) -> bool:
+        runtime = self._entry.runtime_data
+        return bool(runtime.recording_worker is not None and any(event.source == "android_notification" for event in runtime.coordinator.pending_events))
+
+    async def async_press(self) -> None:
+        worker = self._entry.runtime_data.recording_worker
+        if worker is None:
+            raise HomeAssistantError("RECORDING_WORKER_UNAVAILABLE")
+        queued = await worker.async_request_manual_recovery()
+        if queued <= 0:
+            raise HomeAssistantError("NO_PENDING_NOTIFICATION_EVENT")

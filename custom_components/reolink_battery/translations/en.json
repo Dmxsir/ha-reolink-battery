@@ -2,102 +2,19 @@
   "title": "Reolink Battery",
   "config": {
     "step": {
-      "user": {
-        "title": "Reolink account",
-        "description": "Sign in to discover your battery cameras. This does not contact or wake the camera.",
-        "data": {
-          "email": "Account email",
-          "password": "Account password"
-        }
-      },
-      "mfa": {
-        "title": "Multi-factor authentication",
-        "description": "Enter the verification code sent by Reolink.",
-        "data": {
-          "code": "Verification code"
-        }
-      },
-      "device": {
-        "title": "Select a camera",
-        "description": "Select the battery camera to add.",
-        "data": {
-          "uid": "Camera"
-        }
-      },
-      "local": {
-        "title": "Camera-local credentials",
-        "description": "Enter the camera's own admin credentials. Validation opens one short Baichuan session and disconnects immediately; it does not start preview, RTSP, ONVIF, HTTP, or snapshots.",
-        "data": {
-          "username": "Camera-local username",
-          "password": "Camera-local password",
-          "interface": "Physical LAN interface"
-        }
-      }
+      "user": {"title": "Reolink account", "description": "Sign in to discover your battery cameras. This does not contact or wake the camera.", "data": {"email": "Account email", "password": "Account password"}},
+      "mfa": {"title": "Multi-factor authentication", "description": "Enter the verification code sent by Reolink.", "data": {"code": "Verification code"}},
+      "device": {"title": "Select a camera", "description": "Select the battery camera to add.", "data": {"uid": "Camera"}},
+      "local": {"title": "Camera-local credentials", "description": "Enter the camera's own admin credentials. Validation opens one short Baichuan session and disconnects immediately; it does not start preview, RTSP, ONVIF, HTTP, or snapshots.", "data": {"username": "Camera-local username", "password": "Camera-local password", "interface": "Physical LAN interface"}}
     },
-    "error": {
-      "invalid_auth": "The Reolink account credentials or MFA code were rejected.",
-      "cannot_connect": "Could not connect to the Reolink cloud.",
-      "invalid_device_auth": "The camera-local credentials were rejected.",
-      "cannot_connect_device": "Could not resolve, wake, or connect to the camera on the selected LAN.",
-      "unknown": "Unexpected error. Check the logs for the failure type."
-    },
-    "abort": {
-      "already_configured": "This camera is already configured.",
-      "no_devices": "No supported bound Reolink devices were found.",
-      "no_lan_interface": "No suitable private IPv4 LAN interface is enabled in Home Assistant.",
-      "unsupported_auth_path": "This milestone supports the verified legacy local-credential path only."
-    }
+    "error": {"invalid_auth": "The Reolink account credentials or MFA code were rejected.", "cannot_connect": "Could not connect to the Reolink cloud.", "invalid_device_auth": "The camera-local credentials were rejected.", "cannot_connect_device": "Could not resolve, wake, or connect to the camera on the selected LAN.", "unknown": "Unexpected error. Check the logs for the failure type."},
+    "abort": {"already_configured": "This camera is already configured.", "no_devices": "No supported bound Reolink devices were found.", "no_lan_interface": "No suitable private IPv4 LAN interface is enabled in Home Assistant.", "unsupported_auth_path": "This milestone supports the verified legacy local-credential path only."}
   },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Motion notification bridge",
-        "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Recording delivery is intentionally left to Home Assistant automations.",
-        "data": {
-          "notification_entity": "Notification source entity"
-        },
-        "data_description": {
-          "notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge."
-        }
-      }
-    }
-  },
+  "options": {"step": {"init": {"title": "Motion notification bridge", "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Recording delivery is intentionally left to Home Assistant automations.", "data": {"notification_entity": "Notification source entity"}, "data_description": {"notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge."}}}},
   "entity": {
-    "sensor": {
-      "battery": {
-        "name": "Battery"
-      },
-      "storage_total": {
-        "name": "Storage total"
-      },
-      "storage_used": {
-        "name": "Storage used"
-      },
-      "storage_free": {
-        "name": "Storage free"
-      },
-      "wifi_signal": {
-        "name": "Wi-Fi signal"
-      },
-      "last_local_refresh": {
-        "name": "Last local refresh"
-      }
-    },
-    "binary_sensor": {
-      "charging": {
-        "name": "Charging"
-      }
-    },
-    "button": {
-      "refresh_device_status": {
-        "name": "Refresh device status"
-      },
-      "find_pending_recording": {
-        "name": "Find pending recording"
-      },
-      "prepare_pending_recording_download": {
-        "name": "Prepare pending recording download"
-      }
-    }
+    "sensor": {"battery": {"name": "Battery"}, "storage_total": {"name": "Storage total"}, "storage_used": {"name": "Storage used"}, "storage_free": {"name": "Storage free"}, "wifi_signal": {"name": "Wi-Fi signal"}, "last_local_refresh": {"name": "Last local refresh"}, "recordings_queued": {"name": "Recordings queued"}},
+    "binary_sensor": {"charging": {"name": "Charging"}},
+    "button": {"refresh_device_status": {"name": "Refresh device status"}, "find_pending_recording": {"name": "Find pending recording"}, "prepare_pending_recording_download": {"name": "Prepare pending recording download"}, "recover_pending_recordings": {"name": "Download missing recordings"}},
+    "camera": {"live_view": {"name": "Live view"}}
   }
 }
