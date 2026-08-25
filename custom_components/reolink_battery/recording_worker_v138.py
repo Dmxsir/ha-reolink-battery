@@ -1,9 +1,9 @@
-"""v1.3.8 automatic worker recovery for incomplete Argus media streams.
+"""Automatic worker recovery for incomplete Argus media streams.
 
 This layer deliberately leaves the physically validated cmd13/cmd8, heartbeat,
 UDP ACK and file-verification transport unchanged. It only changes retry timing
-when a real MP4 transfer has started and the camera remotely disconnects before
-the authoritative recording size is reached.
+when a real MP4 transfer has started and the transfer ends before the
+authoritative recording size is reached.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from .recording_worker import (
 )
 
 INCOMPLETE_STREAM_FAILURE_STAGE = "STREAM_REMOTE_DISCONNECT_INCOMPLETE"
+INCOMPLETE_STREAM_IDLE_FAILURE_STAGE = "STREAM_IDLE_TIMEOUT_INCOMPLETE"
 INCOMPLETE_STREAM_RETRY_DELAYS_SECONDS = (3.0, 6.0)
 
 
@@ -24,13 +25,14 @@ class RecordingWorker(BaseRecordingWorker):
     """Base worker plus battery-awake fast recovery for partial downloads."""
 
     def _classify_incomplete_stream_failure(self) -> bool:
-        """Promote a verified partial remote disconnect to a distinct failure.
+        """Promote a verified partial transfer stop to a distinct failure.
 
-        A retry is considered fast-recovery eligible only when media bytes were
-        actually written, cmd13 reported an authoritative expected size, fewer
-        bytes were collected than expected, and the remote camera explicitly
-        disconnected the P2P session. This avoids changing retry timing for auth,
-        FileInfo, routing or local filesystem failures.
+        Fast recovery is eligible only when media bytes were actually written,
+        cmd13 reported an authoritative expected size, and fewer bytes were
+        collected than expected. The stop must then be either an explicit remote
+        connection close or a stream idle timeout after transfer progress.
+        Authentication, FileInfo, routing and local filesystem failures keep the
+        original retry timing.
         """
         from .recording_download_beta22 import stream_probe_state
 
@@ -44,18 +46,21 @@ class RecordingWorker(BaseRecordingWorker):
             getattr(trace, "termination_reason", "") or ""
         )
 
-        incomplete = (
-            remote_disconnect
-            and termination_reason == "connection_closed"
-            and file_bytes > 0
-            and expected_size > file_bytes
-        )
-        if not incomplete:
+        partial = file_bytes > 0 and expected_size > file_bytes
+        if not partial:
             return False
 
-        self.state.last_failure_stage = INCOMPLETE_STREAM_FAILURE_STAGE
-        self.state.last_failure_type = "remote_disconnect_before_expected_size"
-        return True
+        if remote_disconnect and termination_reason == "connection_closed":
+            self.state.last_failure_stage = INCOMPLETE_STREAM_FAILURE_STAGE
+            self.state.last_failure_type = "remote_disconnect_before_expected_size"
+            return True
+
+        if termination_reason == "idle_timeout":
+            self.state.last_failure_stage = INCOMPLETE_STREAM_IDLE_FAILURE_STAGE
+            self.state.last_failure_type = "idle_timeout_before_expected_size"
+            return True
+
+        return False
 
     @staticmethod
     def _retry_delay(
@@ -116,7 +121,7 @@ class RecordingWorker(BaseRecordingWorker):
                 # Once a real transfer is interrupted, keep all remaining retries
                 # in the short recovery window even if the immediate reconnect
                 # subsequently fails at wake/auth/FileInfo while the camera is
-                # still transitioning from the remote disconnect.
+                # still transitioning from the interrupted transfer.
                 if self._classify_incomplete_stream_failure():
                     fast_recovery = True
 

@@ -81,10 +81,29 @@ class RecordingStreamRecoveryV138Tests(unittest.TestCase):
             "remote_disconnect_before_expected_size",
         )
 
-    def test_non_partial_or_non_remote_failure_stays_on_base_policy(self) -> None:
+    def test_partial_idle_timeout_is_classified(self) -> None:
+        self._install_trace(
+            remote_disconnect_observed=False,
+            termination_reason="idle_timeout",
+            file_bytes_written=1_261_568,
+            xml_reported_size=9_314_178,
+        )
+        worker = make_worker()
+
+        self.assertTrue(worker._classify_incomplete_stream_failure())
+        self.assertEqual(
+            worker.state.last_failure_stage,
+            recovery_module.INCOMPLETE_STREAM_IDLE_FAILURE_STAGE,
+        )
+        self.assertEqual(
+            worker.state.last_failure_type,
+            "idle_timeout_before_expected_size",
+        )
+
+    def test_non_partial_or_unrelated_failure_stays_on_base_policy(self) -> None:
         for overrides in (
-            {"remote_disconnect_observed": False},
-            {"termination_reason": "idle_timeout"},
+            {"remote_disconnect_observed": False, "termination_reason": "connection_closed"},
+            {"remote_disconnect_observed": False, "termination_reason": "hard_timeout"},
             {"file_bytes_written": 0},
             {"file_bytes_written": 9_555_011},
         ):
