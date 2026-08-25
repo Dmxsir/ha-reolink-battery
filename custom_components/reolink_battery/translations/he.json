@@ -2,107 +2,19 @@
   "title": "Reolink Battery",
   "config": {
     "step": {
-      "user": {
-        "title": "חשבון Reolink",
-        "description": "התחבר כדי לגלות את מצלמות הסוללה. שלב זה אינו פונה למצלמה ואינו מעיר אותה.",
-        "data": {
-          "email": "דוא״ל החשבון",
-          "password": "סיסמת החשבון"
-        }
-      },
-      "mfa": {
-        "title": "אימות דו־שלבי",
-        "description": "הזן את קוד האימות שנשלח על ידי Reolink.",
-        "data": {
-          "code": "קוד אימות"
-        }
-      },
-      "device": {
-        "title": "בחירת מצלמה",
-        "description": "בחר את מצלמת הסוללה שברצונך להוסיף.",
-        "data": {
-          "uid": "מצלמה"
-        }
-      },
-      "local": {
-        "title": "פרטי התחברות מקומיים למצלמה",
-        "description": "הזן את פרטי מנהל המצלמה. האימות פותח חיבור Baichuan קצר וסוגר אותו מיד; ללא תצוגה חיה, RTSP, ONVIF, HTTP או תמונות מצב.",
-        "data": {
-          "username": "שם משתמש מקומי",
-          "password": "סיסמה מקומית",
-          "interface": "ממשק LAN פיזי"
-        }
-      }
+      "user": {"title": "חשבון Reolink", "description": "התחבר כדי לגלות את מצלמות הסוללה. שלב זה אינו פונה למצלמה ואינו מעיר אותה.", "data": {"email": "דוא״ל החשבון", "password": "סיסמת החשבון"}},
+      "mfa": {"title": "אימות דו־שלבי", "description": "הזן את קוד האימות שנשלח על ידי Reolink.", "data": {"code": "קוד אימות"}},
+      "device": {"title": "בחירת מצלמה", "description": "בחר את מצלמת הסוללה שברצונך להוסיף.", "data": {"uid": "מצלמה"}},
+      "local": {"title": "פרטי התחברות מקומיים למצלמה", "description": "הזן את פרטי מנהל המצלמה. האימות פותח חיבור Baichuan קצר וסוגר אותו מיד; ללא תצוגה חיה, RTSP, ONVIF, HTTP או תמונות מצב.", "data": {"username": "שם משתמש מקומי", "password": "סיסמה מקומית", "interface": "ממשק LAN פיזי"}}
     },
-    "error": {
-      "invalid_auth": "פרטי חשבון Reolink או קוד האימות נדחו.",
-      "cannot_connect": "לא ניתן להתחבר לענן Reolink.",
-      "invalid_device_auth": "פרטי ההתחברות המקומיים למצלמה נדחו.",
-      "cannot_connect_device": "לא ניתן לאתר, להעיר או להתחבר למצלמה דרך ה־LAN שנבחר.",
-      "unknown": "שגיאה לא צפויה. בדוק ביומן את סוג הכשל."
-    },
-    "abort": {
-      "already_configured": "המצלמה כבר מוגדרת.",
-      "no_devices": "לא נמצאו בחשבון התקני Reolink קשורים ונתמכים.",
-      "no_lan_interface": "לא נמצא ב־Home Assistant ממשק LAN פרטי מתאים עם IPv4.",
-      "unsupported_auth_path": "אבן דרך זו תומכת רק במסלול האישורים המקומיים שאומת."
-    }
+    "error": {"invalid_auth": "פרטי חשבון Reolink או קוד האימות נדחו.", "cannot_connect": "לא ניתן להתחבר לענן Reolink.", "invalid_device_auth": "פרטי ההתחברות המקומיים למצלמה נדחו.", "cannot_connect_device": "לא ניתן לאתר, להעיר או להתחבר למצלמה דרך ה־LAN שנבחר.", "unknown": "שגיאה לא צפויה. בדוק ביומן את סוג הכשל."},
+    "abort": {"already_configured": "המצלמה כבר מוגדרת.", "no_devices": "לא נמצאו בחשבון התקני Reolink קשורים ונתמכים.", "no_lan_interface": "לא נמצא ב־Home Assistant ממשק LAN פרטי מתאים עם IPv4.", "unsupported_auth_path": "אבן דרך זו תומכת רק במסלול האישורים המקומיים שאומת."}
   },
-  "options": {
-    "step": {
-      "init": {
-        "title": "גשר התראות תנועה",
-        "description": "ניתן לבחור את חיישן Last Notification של אפליקציית Home Assistant Companion בטלפון Android שמקבל את התראות Reolink. הטיפול בהקלטה לאחר ההורדה נשאר בכוונה לאוטומציות של Home Assistant.",
-        "data": {
-          "notification_entity": "ישות מקור ההתראות"
-        },
-        "data_description": {
-          "notification_entity": "בחר את חיישן Last Notification של Companion App. השאר ריק כדי להשבית את גשר ההתראות."
-        }
-      }
-    }
-  },
+  "options": {"step": {"init": {"title": "גשר התראות תנועה", "description": "ניתן לבחור את חיישן Last Notification של אפליקציית Home Assistant Companion בטלפון Android שמקבל את התראות Reolink. הטיפול בהקלטה לאחר ההורדה נשאר בכוונה לאוטומציות של Home Assistant.", "data": {"notification_entity": "ישות מקור ההתראות"}, "data_description": {"notification_entity": "בחר את חיישן Last Notification של Companion App. השאר ריק כדי להשבית את גשר ההתראות."}}}},
   "entity": {
-    "sensor": {
-      "battery": {
-        "name": "סוללה"
-      },
-      "storage_total": {
-        "name": "נפח אחסון כולל"
-      },
-      "storage_used": {
-        "name": "אחסון בשימוש"
-      },
-      "storage_free": {
-        "name": "אחסון פנוי"
-      },
-      "wifi_signal": {
-        "name": "עוצמת אות Wi-Fi"
-      },
-      "last_local_refresh": {
-        "name": "רענון מקומי אחרון"
-      }
-    },
-    "binary_sensor": {
-      "charging": {
-        "name": "בטעינה"
-      }
-    },
-    "button": {
-      "refresh_device_status": {
-        "name": "רענון מצב המצלמה"
-      },
-      "find_pending_recording": {
-        "name": "מצא הקלטה לאירוע הממתין"
-      },
-      "prepare_pending_recording_download": {
-        "name": "הכן הורדת הקלטה ממתינה"
-      }
-    },
-    "camera": {
-      "live_view": {
-        "name": "תצוגה חיה"
-      }
-    }
+    "sensor": {"battery": {"name": "סוללה"}, "storage_total": {"name": "נפח אחסון כולל"}, "storage_used": {"name": "אחסון בשימוש"}, "storage_free": {"name": "אחסון פנוי"}, "wifi_signal": {"name": "עוצמת אות Wi-Fi"}, "last_local_refresh": {"name": "רענון מקומי אחרון"}, "recordings_queued": {"name": "סרטונים בתור"}},
+    "binary_sensor": {"charging": {"name": "בטעינה"}},
+    "button": {"refresh_device_status": {"name": "רענון מצב המצלמה"}, "find_pending_recording": {"name": "מצא הקלטה לאירוע הממתין"}, "prepare_pending_recording_download": {"name": "הכן הורדת הקלטה ממתינה"}, "recover_pending_recordings": {"name": "הורד סרטונים חסרים"}},
+    "camera": {"live_view": {"name": "תצוגה חיה"}}
   }
 }
