@@ -70,6 +70,11 @@ class ReolinkBatteryLiveHub:
         # non-zero, subscriptions may queue but must not start a new producer.
         self._recording_priority_depth = 0
         self._recording_preemptions = 0
+        # v1.3.11 keeps HTTP/go2rtc consumers alive while only the camera-side
+        # producer yields. This avoids turning a recording preemption into EOF
+        # for the whole go2rtc source and lets the producer resume in-place.
+        self._recording_preserved_finishes = 0
+        self._recording_preserved_consumers = 0
 
     @property
     def is_active(self) -> bool:
@@ -88,6 +93,8 @@ class ReolinkBatteryLiveHub:
             "recording_priority_active": self._recording_priority_depth > 0,
             "recording_priority_depth": self._recording_priority_depth,
             "recording_preemptions": self._recording_preemptions,
+            "recording_preserved_finishes": self._recording_preserved_finishes,
+            "recording_preserved_consumers": self._recording_preserved_consumers,
             "last_failure_stage": self._last_failure_stage,
             "last_failure_type": self._last_failure_type,
             "last_session": (
@@ -144,7 +151,13 @@ class ReolinkBatteryLiveHub:
                 self._stop_event.set()
 
     async def async_pause_for_recording(self) -> bool:
-        """Stop Live View and block reconnects until the recording attempt ends.
+        """Stop only the camera producer and block reconnects for recording.
+
+        Existing HTTP/go2rtc consumer queues are intentionally preserved while
+        the camera-side producer yields. This prevents a normal recording
+        preemption from publishing EOF to go2rtc. New/reconnecting consumers may
+        queue while recording priority is active, but no camera producer starts
+        until async_resume_after_recording releases the priority gate.
 
         Returns True when an active producer was asked to yield. The producer is
         awaited outside the hub guard so its normal cleanup can acquire the same
@@ -248,9 +261,15 @@ class ReolinkBatteryLiveHub:
 
     async def _finish_producer(self) -> None:
         async with self._guard:
-            for queue in tuple(self._video_queues) + tuple(self._audio_queues):
-                with suppress(asyncio.QueueFull):
-                    queue.put_nowait(None)
+            preserve_consumers = self._recording_priority_depth > 0
+            consumers = len(self._video_queues) + len(self._audio_queues)
+            if preserve_consumers:
+                self._recording_preserved_finishes += 1
+                self._recording_preserved_consumers += consumers
+            else:
+                for queue in tuple(self._video_queues) + tuple(self._audio_queues):
+                    with suppress(asyncio.QueueFull):
+                        queue.put_nowait(None)
             self._producer_task = None
             self._stop_event = None
 
