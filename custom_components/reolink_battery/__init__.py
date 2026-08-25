@@ -134,7 +134,7 @@ async def async_setup_entry(
     notification_entity = getattr(entry, "options", {}).get(CONF_NOTIFICATION_ENTITY)
     if isinstance(notification_entity, str) and notification_entity:
         from .notification_bridge import NotificationBridge
-        from .recording_worker import RecordingWorker
+        from .recording_worker_v138 import RecordingWorker
 
         runtime.recording_worker = RecordingWorker(hass, entry)
 
