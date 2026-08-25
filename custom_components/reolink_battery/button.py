@@ -52,7 +52,6 @@ PREPARE_DOWNLOAD_DESCRIPTION = ButtonEntityDescription(
 RECOVER_RECORDINGS_DESCRIPTION = ButtonEntityDescription(
     key="recover_pending_recordings",
     translation_key="recover_pending_recordings",
-    icon="mdi:download-multiple",
 )
 
 
@@ -325,6 +324,7 @@ class ReolinkRecoverPendingRecordingsButton(ButtonEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = True
+    _attr_icon = "mdi:download-multiple"
     entity_description = RECOVER_RECORDINGS_DESCRIPTION
 
     def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
