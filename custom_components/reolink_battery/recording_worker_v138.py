@@ -1,13 +1,15 @@
 """Automatic worker recovery for incomplete Argus media streams.
 
 This layer deliberately leaves the physically validated cmd13/cmd8, heartbeat,
-UDP ACK and file-verification transport unchanged. It only changes retry timing
-when a real MP4 transfer has started and the transfer ends before the
-authoritative recording size is reached.
+UDP ACK and file-verification transport unchanged. It changes retry timing when
+a real MP4 transfer ends incomplete and, from v1.3.10, gives recording attempts
+priority over an active on-demand Live View session that owns the shared local
+camera-operation lease.
 """
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 
 from .recording_worker import (
@@ -22,7 +24,34 @@ INCOMPLETE_STREAM_RETRY_DELAYS_SECONDS = (3.0, 6.0)
 
 
 class RecordingWorker(BaseRecordingWorker):
-    """Base worker plus battery-awake fast recovery for partial downloads."""
+    """Base worker plus battery-awake recovery and recording priority."""
+
+    async def _process_once(self, event) -> bool:
+        """Run one attempt after asking an active Live View session to yield.
+
+        Live View and recording intentionally share one local-operation lock so
+        two Baichuan sessions are never opened concurrently on the battery camera.
+        A Live View consumer can legitimately remain connected for minutes,
+        however, so simply waiting on that lock can make a fresh recording event
+        stale before UID discovery even begins. The hub's recording-priority gate
+        stops the current producer, blocks reconnects, lets the base worker take
+        the existing lock normally, then re-enables queued Live View consumers.
+        """
+        runtime = self._entry.runtime_data
+        live_hub = getattr(runtime, "live_hub", None)
+        pause = getattr(live_hub, "async_pause_for_recording", None)
+        resume = getattr(live_hub, "async_resume_after_recording", None)
+        if not callable(pause) or not callable(resume):
+            return await super()._process_once(event)
+
+        await pause()
+        try:
+            return await super()._process_once(event)
+        finally:
+            # A Live View restart problem must never turn a completed verified
+            # recording into a worker failure or prevent retry classification.
+            with suppress(Exception):
+                await resume()
 
     def _classify_incomplete_stream_failure(self) -> bool:
         """Promote a verified partial transfer stop to a distinct failure.
