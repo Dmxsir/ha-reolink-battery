@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.11 — Preserve Live View consumers across recording priority
+- Fixes a Live View regression reported after v1.3.10 where recording priority could stop the camera producer and `_finish_producer()` also published EOF (`None`) to every H264/AAC HTTP consumer, leaving the go2rtc-backed Live View dead instead of resuming reliably.
+- Keeps v1.3.10 recording priority and the single-local-session invariant: recording still stops/yields the active camera-side Live View producer before taking `local_operation_lock`.
+- During recording priority, preserves the existing HTTP/go2rtc consumer queues instead of closing them. New/reconnecting consumers may also queue while the recording owns priority.
+- After the recording attempt, starts a fresh camera producer against those preserved consumers so Live View can resume without depending on an EOF-triggered go2rtc reconnect cycle.
+- Retains normal EOF behavior for genuine Live View termination when recording priority is not active.
+- Adds secret-safe `recording_preserved_finishes` and `recording_preserved_consumers` diagnostics and regression coverage verifying EOF is only emitted on the non-priority finish path.
+- Leaves recording cmd13/cmd8 framing, heartbeat, UDP ACK behavior, exact-size verification, 60-second settle, bounded retries and v1.3.8/v1.3.9 incomplete-stream recovery unchanged.
+
 ## v1.3.10 — Recording priority over Live View
 - Fixes a real field failure where a fresh recording event reached its 60-second settle point but then remained stuck for more than 17 minutes before UID discovery because an active Live View session held the shared `local_operation_lock`.
 - Adds an explicit recording-priority gate to the on-demand Live View hub. When a recording attempt is ready, an active Live View producer is asked to stop and yield the shared camera-operation lease.
@@ -75,7 +84,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.10` is the next stable patch release prepared from the v1.3.9 baseline.
+- `v1.3.11` is the next stable patch release prepared from the v1.3.10 baseline.
 - Every version bump must include matching root/archive checkpoints before release.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
