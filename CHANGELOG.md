@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.12 — Queue visibility and explicit backlog recovery
+- Adds a Home Assistant sensor `Recordings queued` / `סרטונים בתור` that counts pending Android recording events without contacting or waking the camera.
+- Adds queue-state attributes for `deferred`, `fresh_automatic`, and `stale` so the visible count can be interpreted without opening diagnostics.
+- Adds a user-initiated `Download missing recordings` / `הורד סרטונים חסרים` button when the notification bridge/recording worker is configured.
+- The button explicitly re-arms deferred Android events and marks all currently pending Android events as manual recovery work, including events older than the normal 10-minute automatic freshness window.
+- Manual recovery remains serialized through the existing worker, uses the same recording-priority gate against Live View, keeps the three-attempt bound and existing fast partial-stream recovery, and still requires exact-size verified MP4 output before completing an event.
+- Automatic startup behavior is unchanged: stale/deferred backlog still does not wake the battery camera merely because Home Assistant restarted. The freshness bypass exists only after an explicit user button press.
+- Completed-recording fingerprint deduplication remains active during manual recovery, preventing already verified SD clips from being downloaded/sent again when multiple queued events map to the same physical recording.
+- Adds secret-safe manual-recovery diagnostics (`manual_recovery_requests`, `manual_recovery_last_queued`, `manual_recovery_rearmed`, `manual_recovery_remaining`, `manual_recovery_policy`).
+- Adds Hebrew and English entity translations plus dedicated regression coverage.
+- Leaves cmd13/cmd8 framing, heartbeat, UDP ACK behavior, exact-size verification, recording settle timing and Live View consumer-preservation behavior unchanged.
+
 ## v1.3.11 — Preserve Live View consumers across recording priority
 - Fixes a Live View regression reported after v1.3.10 where recording priority could stop the camera producer and `_finish_producer()` also published EOF (`None`) to every H264/AAC HTTP consumer, leaving the go2rtc-backed Live View dead instead of resuming reliably.
 - Keeps v1.3.10 recording priority and the single-local-session invariant: recording still stops/yields the active camera-side Live View producer before taking `local_operation_lock`.
@@ -84,7 +96,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.11` is the next stable patch release prepared from the v1.3.10 baseline.
+- `v1.3.12` is the next stable patch release prepared from the v1.3.11 baseline.
 - Every version bump must include matching root/archive checkpoints before release.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
