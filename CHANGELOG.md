@@ -1,6 +1,14 @@
 # Changelog
 
-## v1.3.7 (unreleased) — Battery-safe motion backlog processing
+## v1.3.8 (unreleased) — Incomplete stream fast recovery
+- Detects the narrow failure where cmd13/cmd8 media transfer has started, MP4 bytes were written, the authoritative recording size is still larger than the collected file, and the Argus explicitly closes the P2P session.
+- Classifies that case as `STREAM_REMOTE_DISCONNECT_INCOMPLETE` instead of the generic `RECORDING_FILE_NOT_VERIFIED` failure.
+- Preserves the existing three-attempt bound but changes the remaining retry waits to 3 and 6 seconds after a confirmed partial remote disconnect, keeping retries inside the camera-awake window.
+- Keeps 30/60-second retry timing for auth, FileInfo, routing, local file and other failures until a real incomplete stream has been observed.
+- Leaves the validated cmd13/cmd8 framing, full-high/mainStream request, heartbeat cadence, periodic UDP ACK behavior, exact-size MP4 verification and partial-file cleanup unchanged.
+- Adds deterministic regression coverage and CI validation for the recovery layer.
+
+## v1.3.7 — Battery-safe motion backlog processing
 - Requires explicit post-start state-change provenance before a stale Android notification can be promoted to an `android-repost`; a stale deterministic source never wakes the camera, while only its callback-time promoted event may wake.
 - Persists automatic recording deferrals in the existing bounded event queue, backward-compatible with stored v1 data.
 - Activates only newly accepted events and never re-arms unrelated deferred backlog when a fresh notification arrives.
@@ -50,7 +58,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.7` is the next stable patch release prepared from the v1.3.6 baseline.
+- `v1.3.8` is the next stable patch release prepared from the v1.3.7 baseline.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
 - Refactor legacy beta-named modules only in a separate behavior-preserving cleanup after the stable release is proven.
