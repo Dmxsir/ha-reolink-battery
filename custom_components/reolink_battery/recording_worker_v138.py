@@ -2,9 +2,9 @@
 
 This layer deliberately leaves the physically validated cmd13/cmd8, heartbeat,
 UDP ACK and file-verification transport unchanged. It changes retry timing when
-a real MP4 transfer ends incomplete and, from v1.3.10, gives recording attempts
-priority over an active on-demand Live View session that owns the shared local
-camera-operation lease.
+a real MP4 transfer ends incomplete, gives recording attempts priority over an
+active on-demand Live View session, and provides explicit manual backlog recovery
+without weakening the automatic 10-minute freshness policy.
 """
 
 from __future__ import annotations
@@ -24,7 +24,107 @@ INCOMPLETE_STREAM_RETRY_DELAYS_SECONDS = (3.0, 6.0)
 
 
 class RecordingWorker(BaseRecordingWorker):
-    """Base worker plus battery-awake recovery and recording priority."""
+    """Base worker plus battery-awake recovery, priority and manual recovery."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._manual_recovery_event_ids: set[str] = set()
+        self._manual_recovery_requests = 0
+        self._manual_recovery_rearmed = 0
+        self._manual_recovery_last_queued = 0
+
+    async def async_request_manual_recovery(self) -> int:
+        """Explicitly activate every pending Android event, including stale ones.
+
+        This method is only called from the user-pressed recovery button. Normal
+        startup and automatic motion processing keep the existing freshness and
+        deferred-event rules. A manual request re-arms deferred pending events,
+        marks all current Android events as explicit recovery work and wakes the
+        serialized worker. Existing deduplication still prevents re-downloading a
+        recording that has already been verified and remembered.
+        """
+        coordinator = self._entry.runtime_data.coordinator
+        pending = [
+            event
+            for event in coordinator.pending_events
+            if event.source == "android_notification"
+        ]
+        if not pending:
+            self._manual_recovery_last_queued = 0
+            return 0
+
+        rearmed = 0
+        for event in pending:
+            if coordinator.is_event_deferred(event.event_id):
+                if await coordinator.async_rearm_event(event.event_id):
+                    rearmed += 1
+
+        event_ids = {event.event_id for event in pending}
+        self._manual_recovery_event_ids.update(event_ids)
+        self._activated_event_ids.update(event_ids)
+        self._manual_recovery_requests += 1
+        self._manual_recovery_rearmed += rearmed
+        self._manual_recovery_last_queued = len(event_ids)
+        self.state.deferred_rearmed_count += rearmed
+        self.state.pending_trigger = True
+        self._trigger.set()
+        self._refresh_pending_counts()
+        return len(event_ids)
+
+    def _next_android_event(self, now: datetime | None = None):
+        """Return newest explicit manual work or normal fresh automatic work."""
+        now = now or datetime.now(UTC)
+        coordinator = self._entry.runtime_data.coordinator
+        candidates = (
+            event
+            for event in coordinator.pending_events
+            if event.source == "android_notification"
+            and not coordinator.is_event_deferred(event.event_id)
+            and (
+                event.event_id in self._manual_recovery_event_ids
+                or (
+                    event.event_id in self._activated_event_ids
+                    and self._is_fresh(event, now)
+                )
+            )
+        )
+        return max(candidates, key=self._event_time, default=None)
+
+    async def _defer_stale_activated_events(self, now: datetime) -> None:
+        """Defer stale automatic work, but never stale explicit manual work."""
+        for event in self._entry.runtime_data.coordinator.pending_events:
+            if (
+                event.event_id in self._activated_event_ids
+                and event.event_id not in self._manual_recovery_event_ids
+                and not self._is_fresh(event, now)
+            ):
+                await self._defer_event(event, "automatic_event_stale")
+        self._refresh_pending_counts(now)
+
+    async def _defer_event(self, event, reason: str) -> None:
+        await super()._defer_event(event, reason)
+        self._manual_recovery_event_ids.discard(event.event_id)
+
+    def policy_diagnostics(self) -> dict[str, object]:
+        """Extend base policy diagnostics with explicit recovery state."""
+        data = super().policy_diagnostics()
+        pending_ids = {
+            event.event_id
+            for event in self._entry.runtime_data.coordinator.pending_events
+            if event.source == "android_notification"
+        }
+        data.update(
+            {
+                "manual_recovery_requests": self._manual_recovery_requests,
+                "manual_recovery_last_queued": self._manual_recovery_last_queued,
+                "manual_recovery_rearmed": self._manual_recovery_rearmed,
+                "manual_recovery_remaining": len(
+                    pending_ids.intersection(self._manual_recovery_event_ids)
+                ),
+                "manual_recovery_policy": "explicit_button_all_pending",
+            }
+        )
+        return data
 
     async def _process_once(self, event) -> bool:
         """Run one attempt after asking an active Live View session to yield.
@@ -111,7 +211,7 @@ class RecordingWorker(BaseRecordingWorker):
         ]
 
     async def _process_trigger(self) -> None:
-        """Process one motion while preserving a partial-download wake window."""
+        """Process motion/manual work while preserving partial-download recovery."""
         await self._defer_stale_activated_events(datetime.now(UTC))
         event = self._next_android_event()
         while event is not None and not self._stopped.is_set():
@@ -145,6 +245,7 @@ class RecordingWorker(BaseRecordingWorker):
                 if await self._process_once(event):
                     completed = True
                     self._activated_event_ids.discard(event.event_id)
+                    self._manual_recovery_event_ids.discard(event.event_id)
                     break
 
                 # Once a real transfer is interrupted, keep all remaining retries
