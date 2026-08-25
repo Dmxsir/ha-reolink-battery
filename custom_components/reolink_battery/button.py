@@ -49,6 +49,11 @@ PREPARE_DOWNLOAD_DESCRIPTION = ButtonEntityDescription(
     key="prepare_pending_recording_download",
     translation_key="prepare_pending_recording_download",
 )
+RECOVER_RECORDINGS_DESCRIPTION = ButtonEntityDescription(
+    key="recover_pending_recordings",
+    translation_key="recover_pending_recordings",
+    icon="mdi:download-multiple",
+)
 
 
 async def async_setup_entry(
@@ -62,6 +67,7 @@ async def async_setup_entry(
             ReolinkRefreshDeviceStatusButton(entry),
             ReolinkFindPendingRecordingButton(entry),
             ReolinkPreparePendingRecordingDownloadButton(entry),
+            ReolinkRecoverPendingRecordingsButton(entry),
         )
     )
 
@@ -312,3 +318,39 @@ class ReolinkPreparePendingRecordingDownloadButton(ButtonEntity):
                 f"DOWNLOAD_PREPARE_RESPONSE_{result.response.response_code}"
             )
             raise HomeAssistantError(state.failure_stage)
+
+
+class ReolinkRecoverPendingRecordingsButton(ButtonEntity):
+    """Explicitly rearm and process all pending Android recording events."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = True
+    entity_description = RECOVER_RECORDINGS_DESCRIPTION
+
+    def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_recover_pending_recordings"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._entry.data[CONF_UID])})
+
+    @property
+    def available(self) -> bool:
+        runtime = self._entry.runtime_data
+        return bool(
+            runtime.recording_worker is not None
+            and any(
+                event.source == "android_notification"
+                for event in runtime.coordinator.pending_events
+            )
+        )
+
+    async def async_press(self) -> None:
+        """Make the current backlog explicit work and wake the serialized worker."""
+        worker = self._entry.runtime_data.recording_worker
+        if worker is None:
+            raise HomeAssistantError("RECORDING_WORKER_UNAVAILABLE")
+        queued = await worker.async_request_manual_recovery()
+        if queued <= 0:
+            raise HomeAssistantError("NO_PENDING_NOTIFICATION_EVENT")
