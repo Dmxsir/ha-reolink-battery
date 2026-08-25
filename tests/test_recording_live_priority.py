@@ -34,7 +34,7 @@ class RecordingLivePriorityTests(unittest.TestCase):
         )
         segment = ast.get_source_segment(source, process_once) or ""
         pause_pos = segment.find("await pause()")
-        base_pos = segment.find("await super()._process_once(event)")
+        base_pos = segment.find("await super()._process_once(event)", pause_pos)
         resume_pos = segment.rfind("await resume()")
         self.assertGreaterEqual(pause_pos, 0)
         self.assertGreater(base_pos, pause_pos)
