@@ -20,6 +20,8 @@ jobs:
           python-version: "3.14"
       - name: Compile Python sources
         run: python -m compileall -q custom_components/reolink_battery
+      - name: Release checkpoint consistency
+        run: python tests/test_release_checkpoint.py
       - name: Notification bridge regression tests
         run: python tests/test_notification_bridge.py
       - name: Recording backlog policy regression tests
