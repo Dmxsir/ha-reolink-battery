@@ -1,9 +1,9 @@
 # Reolink Battery Development Checkpoint
 
-**Checkpoint version:** v1.3.11  
+**Checkpoint version:** v1.3.12  
 **Checkpoint date:** 2026-08-25  
 **Repository:** `Dmxsir/ha-reolink-battery`  
-**Release target:** `v1.3.11`  
+**Release target:** `v1.3.12`  
 **Primary field-test camera:** Reolink Argus 2E  
 **Home Assistant field environment:** HA 2026.8.2 / HA OS 18.2 / Python 3.14.6 / x86_64  
 **Camera firmware observed:** `0616_722_52_478`  
@@ -11,19 +11,30 @@
 
 ---
 
-## 1. Purpose
+## 1. Purpose of this checkpoint
 
-This is the authoritative handoff for continuing the Reolink Battery project in a new ChatGPT/Codex session. Read it completely before changing recording transport, Live View arbitration, retry timing, or queue policy.
+This is the authoritative handoff for continuing the Reolink Battery project in a new ChatGPT/Codex session. Read it completely before changing recording transport, retry timing, queue semantics, Live View arbitration, or the new manual recovery controls.
 
-The basic Argus 2E protocol is already physically proven. Current work is reliability hardening around battery-camera wake state, media-transfer stalls, and interaction between on-demand Live View and automatic recording.
+The underlying Argus 2E recording protocol is already physically proven. Current development is reliability hardening and Home Assistant workflow usability, not rediscovery of cmd13/cmd8.
 
-Every future version bump must update this root `CHECKPOINT.md` and create an identical archive at `docs/checkpoints/v<version>.md`. `tests/test_release_checkpoint.py` and the GitHub release workflow enforce this.
+Every future version bump must:
+
+1. update root `CHECKPOINT.md`;
+2. create a byte-identical archive at `docs/checkpoints/v<version>.md`;
+3. update `CHANGELOG.md` and `manifest.json`;
+4. pass `tests/test_release_checkpoint.py`;
+5. pass compile, regression, integration-load and HACS validation;
+6. only then publish the GitHub release.
+
+The release workflow itself verifies checkpoint consistency.
 
 ---
 
-## 2. Product goal and battery-safety model
+## 2. Product goal
 
-Automatic workflow:
+Build a battery-safe Home Assistant integration for Reolink battery cameras, validated primarily against the physical **Argus 2E**.
+
+Automatic recording workflow:
 
 ```text
 Reolink motion
@@ -31,33 +42,42 @@ Reolink motion
   -> Home Assistant Companion Last Notification sensor
   -> Reolink Battery notification bridge
   -> persistent event queue
-  -> camera remains closed during settle period
+  -> camera remains closed during recording settle
   -> local UID wake/discovery
   -> legacy local authentication
   -> FileInfo recording lookup
   -> cmd13 prepare/download handle
   -> cmd8 full MP4 transfer
   -> exact authoritative-size verification
-  -> fsync + atomic .part -> .mp4 rename
-  -> reolink_battery_recording_ready
+  -> fsync + atomic .part -> .mp4 finalization
+  -> reolink_battery_recording_ready HA event
   -> optional Telegram automation
 ```
 
-Battery-safety invariants:
-
-1. No continuous polling of the sleeping camera for motion.
-2. Android push is the automatic motion trigger.
-3. Initial automatic recording settle remains 60 seconds unless field evidence justifies a separate experiment.
-4. No simultaneous local recording and Live View Baichuan sessions.
-5. Recording gets priority once a fresh event reaches its processing point.
-6. Automatic retries are bounded.
-7. Stale backlog does not repeatedly wake the camera.
-8. Partial files never become final recordings.
-9. Exact expected size is required before `recording_ready` fires.
+On-demand Live View is a separate path through the integration/go2rtc. Automatic motion detection does **not** require continuous RTSP/ONVIF/polling.
 
 ---
 
-## 3. Authentication and tested device conclusions
+## 3. Battery-safety invariants
+
+Preserve these unless later real-hardware evidence deliberately changes the design:
+
+1. No continuous camera polling for automatic motion detection.
+2. Android push notification is the automatic trigger.
+3. Initial automatic recording settle remains 60 seconds.
+4. Only one local Baichuan camera session at a time.
+5. Recording gets priority over an indefinitely open Live View once a recording attempt is ready.
+6. Automatic retries remain bounded to three attempts per event.
+7. Stale backlog does not automatically wake the camera merely because Home Assistant restarted.
+8. Deferred backlog is not silently rearmed by unrelated new motion.
+9. A manual recovery button may explicitly bypass automatic freshness rules because the user deliberately requested the wake/recovery work.
+10. Partial MP4 files never become final recordings.
+11. Exact authoritative expected size is required before final save/ready event.
+12. Completed-recording fingerprints prevent duplicate downloads/sends of the same physical SD clip.
+
+---
+
+## 4. Authentication and tested hardware conclusions
 
 Test device:
 
@@ -71,82 +91,92 @@ Auth path: legacy_local_credential
 Established conclusions:
 
 - Reolink cloud login works.
-- The camera is bound to the cloud account.
-- Cloud credentials alone are not sufficient for the local recording path.
+- Camera is bound to the cloud account.
+- Cloud account credentials alone are insufficient for local recording download.
 - A local camera administrator password is required.
 - The tested unit does not expose a usable protocol-3/sigV3 path.
-- LAN/P2P UID discovery works.
-- Legacy local login works on the real camera.
-- Battery-camera wake/readiness races can still cause transient auth/FileInfo failures; do not automatically interpret every `AUTH_ERROR` as a wrong password.
+- UID discovery/wake over the local/P2P path works.
+- Legacy local authentication works on the physical camera.
+- Battery-camera wake/readiness races can still produce transient auth/FileInfo failures; do not automatically interpret every `AUTH_ERROR` as a wrong password.
+
+Current Python requirements:
+
+```text
+pycryptodomex==3.23.0
+reolink-aio==0.21.8
+```
 
 ---
 
-## 4. Official SDK oracle and physically proven recording protocol
+## 5. Official SDK oracle and physically proven recording protocol
 
-The official Windows SDK was used as an oracle on the same Argus 2E.
+The official Windows SDK was previously used as an oracle against the same Argus 2E.
 
 Observed official behavior:
 
 ```text
 LAN connection -> OPEN_SUCCESS
 recording query -> response code 0
-cmd16 before download
+cmd16 observed before download
 cmd13 -> accepted
 cmd8 -> accepted
 full recording bytes received
 ```
 
-One SDK clip completed at exactly:
+One SDK recording completed exactly at:
 
 ```text
 10,521,742 / 10,521,742 bytes
 ```
 
-The portable implementation later reproduced full recording download behavior.
+The portable integration later reproduced complete end-to-end recording download on the real camera.
 
-Validated transport characteristics retained in stable code:
+Validated stable transport behavior includes:
 
-- FileInfo recording lookup and candidate selection.
-- cmd13 prepare request.
-- cmd13 returned download handle.
-- cmd8 using proven full-high `FileInfo` layout.
-- forced `mainStream` on the tested camera.
-- same authenticated local session handoff.
-- fresh heartbeat transaction IDs after login.
-- P2P heartbeat approximately every 1 second.
-- periodic UDP ACK approximately every 10 ms.
-- inclusive-highest ACK behavior derived from physical/official-client work.
-- authoritative expected recording size.
-- `.part` temporary file.
-- valid MP4 `ftyp` check.
-- exact-size final validation.
-- fsync before finalization.
-- atomic rename only after success.
-- failed/incomplete `.part` cleanup.
+- FileInfo recording lookup and candidate selection;
+- cmd13 prepare request;
+- cmd13 returned download handle;
+- cmd8 proven full-high `FileInfo` layout;
+- forced `mainStream` on the tested unit;
+- same authenticated recording-session handoff;
+- fresh heartbeat transaction IDs after login;
+- P2P heartbeat approximately every 1 second;
+- periodic UDP ACK approximately every 10 ms;
+- inclusive-highest ACK semantics established from physical/official-client work;
+- authoritative recording size;
+- `.part` temporary file;
+- MP4 `ftyp` validation;
+- fsync;
+- exact-size verification;
+- atomic rename only after success;
+- partial-file deletion on failure;
+- `reolink_battery_recording_ready` only after a verified final MP4 exists.
 
-Do **not** rewrite cmd13/cmd8 framing, heartbeat, ACK bitmap semantics, payload offsets, or exact-size verification just because a worker/session-management test fails. Those components have already produced successful full downloads and successful Telegram end-to-end delivery.
+### Critical transport rule
 
-Retained diagnostic transport baselines:
+Do **not** rewrite cmd13/cmd8 framing, heartbeat cadence, UDP ACK bitmap semantics, payload offsets, handle use or exact-size acceptance merely because a later worker/UI/session-management test fails. These components have already produced successful full downloads and successful Telegram delivery.
+
+Retained diagnostic transport references:
 
 ```text
 v0.1.2-beta.40
   fresh post-auth heartbeat TIDs
-  ~1s heartbeat
-  ~10ms periodic-only inclusive-highest ACK
+  ~1-second heartbeat
+  ~10 ms periodic-only inclusive-highest ACK
   reliable cmd13/cmd8
   full-high/mainStream
 
 v0.1.2-beta.45
-  authoritative cmd13 size used to size verified collector
-  >16 MiB verified recordings supported
-  128 MiB hard safety cap retained
+  authoritative cmd13 size used for verified collector sizing
+  recordings larger than former 16 MiB diagnostic ceiling
+  128 MiB verified hard cap retained
 ```
 
-Stable code intentionally still inherits from beta-named modules. Do not remove them as part of an unrelated reliability fix.
+Stable code intentionally still inherits behavior from beta-named modules. Do not remove/refactor those modules during unrelated reliability work.
 
 ---
 
-## 5. Notification bridge and queue policy
+## 6. Notification bridge and persistent queue
 
 The Android notification bridge is considered operational. Field diagnostics have repeatedly shown:
 
@@ -159,7 +189,7 @@ last_event_queued: true
 duplicate_rejected: false
 ```
 
-Automatic worker constants/policy:
+Base automatic worker policy:
 
 ```text
 RECORDING_SETTLE_SECONDS = 60.0
@@ -172,14 +202,16 @@ startup_recovery_policy = newest_fresh_non_deferred_only
 retry_preemption_policy = newer_notification_before_retry
 ```
 
-Important behavior:
+Automatic behavior:
 
 - newest explicitly activated fresh Android event wins;
-- stale backlog is retained but does not wake the camera;
-- exhausted events are persistently deferred;
-- deferred events are not silently rearmed;
+- stale backlog stays persistent but does not automatically wake the camera;
+- events exhausting retries are persistently deferred;
+- deferred events are not automatically rearmed;
 - startup recovery selects at most the newest fresh non-deferred event;
-- a newer notification may preempt an older event during retry wait;
+- other fresh startup events may be deferred as `startup_not_selected`;
+- stale startup events are deferred rather than waking the camera;
+- newer notification may preempt an older event's retry wait;
 - an active camera/download attempt is not cancelled merely because newer motion arrives.
 
 Recording dedupe policy:
@@ -188,15 +220,13 @@ Recording dedupe policy:
 persistent_candidate_fingerprint_before_cmd13
 ```
 
-Multiple notifications mapping to the same physical SD clip should not download/send the same MP4 repeatedly.
+If multiple queue events map to the same already verified SD-card recording, the later event can complete silently before cmd13/cmd8 rather than re-download/send it.
 
 ---
 
-## 6. Real failure leading to v1.3.8
+## 7. v1.3.8 — explicit remote-close incomplete stream recovery
 
-A real motion event progressed through notification, queue, UID, auth, FileInfo, cmd13 and cmd8. MP4 transfer started but the camera explicitly closed the session early.
-
-Observed telemetry:
+Real field failure:
 
 ```text
 xml_reported_size:          9,555,011
@@ -221,13 +251,13 @@ file_saved: false
 part_removed_on_failure: true
 ```
 
-v1.3.8 added a narrow classifier:
+v1.3.8 added:
 
 ```text
 STREAM_REMOTE_DISCONNECT_INCOMPLETE
 ```
 
-Eligibility requires:
+Eligibility:
 
 ```text
 remote_disconnect_observed == true
@@ -236,13 +266,13 @@ file_bytes_written > 0
 expected_size > file_bytes_written
 ```
 
-Once this signature occurs, remaining bounded retries use 3 and 6 seconds instead of 30/60, attempting to reuse the Argus awake window.
+After this signature occurs, remaining bounded retries use 3 and 6 seconds rather than 30/60 seconds to reuse the battery-camera awake window.
 
 ---
 
-## 7. Real failure leading to v1.3.9
+## 8. v1.3.9 — partial idle-timeout recovery
 
-A later physical run produced another partial-transfer signature without explicit remote disconnect:
+Another real field run produced:
 
 ```text
 event_time:                2026-08-25T14:18:28.832000+00:00
@@ -262,7 +292,7 @@ v1.3.9 added:
 STREAM_IDLE_TIMEOUT_INCOMPLETE
 ```
 
-Eligibility requires:
+Eligibility:
 
 ```text
 file_bytes_written > 0
@@ -270,9 +300,9 @@ expected_size > file_bytes_written
 termination_reason == idle_timeout
 ```
 
-The same 3/6-second bounded fast retry is used. Zero-byte timeouts and unrelated failures retain the base 30/60 policy.
+It uses the same 3/6-second bounded fast recovery. Zero-byte/unrelated failures retain the ordinary 30/60 policy.
 
-During that field session, a newer notification also correctly preempted the older retry wait:
+During that field session newer-motion retry preemption was also physically observed:
 
 ```text
 retry_preemptions: 1
@@ -280,32 +310,25 @@ last_preempted_event_time:  2026-08-25T14:18:28.832000+00:00
 last_preempting_event_time: 2026-08-25T14:20:28.885000+00:00
 ```
 
-That behavior is intentional.
+That preemption behavior is intentional.
 
 ---
 
-## 8. Real failure leading to v1.3.10 — Live View lock starvation
+## 9. v1.3.10 — recording priority over Live View
 
-After v1.3.9, a new field capture exposed a completely different issue.
+After v1.3.9, diagnostics showed a fresh recording attempt nominally running for more than 17 minutes while **no UID discovery datagram had been sent**.
 
-Latest motion notification:
+Field event:
 
 ```text
-2026-08-25T15:53:54.887000+00:00
-18:53:54 local Asia/Jerusalem
+notification UTC: 2026-08-25T15:53:54.887000+00:00
+attempt UTC:      2026-08-25T15:54:54.887984+00:00
 ```
 
-Worker attempt began exactly after the 60-second settle:
+Worker signature approximately 17 minutes later:
 
 ```text
-2026-08-25T15:54:54.887984+00:00
-18:54:54 local
-```
-
-Diagnostics were exported around 19:12 local. The worker had nominally been running for more than 17 minutes, but transport had never started:
-
-```text
-recording_worker.running: true
+running: true
 attempts: 1
 retries: 0
 last_failure_stage: null
@@ -317,7 +340,7 @@ cmd8_frames: 0
 file_write_attempted: false
 ```
 
-At exactly the same time Live View showed:
+At the same time Live View showed:
 
 ```text
 active: true
@@ -326,25 +349,19 @@ sessions_started: 1
 sessions_completed: 0
 ```
 
-Code inspection confirmed both use the same `runtime.local_operation_lock`:
+Code inspection confirmed Live View and recording intentionally use the same `runtime.local_operation_lock`, but Live View held it for the entire long-running stream. Recording therefore starved **before UID discovery**.
 
-```text
-Live View holds lock for entire async_stream_media session.
-Recording worker takes the same lock before async_prepare_download_for_event.
-```
+v1.3.10 added recording priority:
 
-Therefore recording was starved before UID discovery. This was not an auth, FileInfo, cmd13/cmd8 or UDP failure.
+1. recording asks `live_hub.async_pause_for_recording()`;
+2. active Live View camera producer receives stop;
+3. Live View producer releases the shared camera lease;
+4. new/reconnecting Live View producers are gated while recording priority is active;
+5. recording obtains the existing shared lock normally;
+6. after the attempt `async_resume_after_recording()` releases priority;
+7. only one local camera session still exists at a time.
 
-v1.3.10 introduced recording priority:
-
-1. recording requests `live_hub.async_pause_for_recording()`;
-2. active Live View producer receives its normal stop event;
-3. reconnecting Live View producers are gated while priority depth is non-zero;
-4. recording then obtains the existing shared lock normally;
-5. after the attempt the worker calls `async_resume_after_recording()`;
-6. one local Baichuan session at a time remains invariant.
-
-v1.3.10 diagnostics added:
+Diagnostics added:
 
 ```text
 recording_priority_active
@@ -354,35 +371,18 @@ recording_preemptions
 
 ---
 
-## 9. Field report leading to v1.3.11 — Live View stopped working
+## 10. v1.3.11 — preserve Live View consumers across recording priority
 
-After v1.3.10 was released, the field report was:
+After v1.3.10 the field report was:
 
 ```text
 "גם הלייב פייד הפסיק לעבוד"
 Live feed also stopped working.
 ```
 
-Review of the v1.3.10 Live View lifecycle exposed a concrete regression risk.
+Review found a concrete lifecycle regression: the Live View camera producer correctly yielded for recording, but its common `_finish_producer()` path also published `None` to every H264/AAC queue. The HTTP media handlers interpret `None` as EOF, so go2rtc's source HTTP connections were deliberately terminated during recording preemption.
 
-`async_pause_for_recording()` correctly stopped only the active camera-side producer, but the producer's common cleanup path `_finish_producer()` still did this unconditionally:
-
-```text
-for every video/audio queue:
-    queue.put_nowait(None)
-```
-
-The HTTP media view interprets `None` as EOF, breaks its response loop, unsubscribes the queue and closes the HTTP response. Therefore a recording preemption did not merely yield the camera lease; it also deliberately terminated the H264/AAC HTTP sources feeding go2rtc.
-
-That made Live View recovery dependent on an EOF/reconnect cycle in go2rtc. Even if go2rtc normally retries sources, this coupling is unnecessary and can leave the Home Assistant Live View dead after recording arbitration.
-
-This is a lifecycle regression in v1.3.10, not evidence that the Baichuan live media protocol itself stopped working.
-
----
-
-## 10. v1.3.11 design — preserve consumers, replace only producer
-
-v1.3.11 keeps recording priority but separates two concepts:
+v1.3.11 separated:
 
 ```text
 camera producer lifecycle
@@ -390,168 +390,582 @@ camera producer lifecycle
 HTTP/go2rtc consumer lifecycle
 ```
 
-During recording preemption:
+During recording priority:
 
-```text
-Live View HTTP/go2rtc consumers remain subscribed/open
-        ↓
-active camera-side producer receives stop_event
-        ↓
-producer releases local_operation_lock
-        ↓
-recording performs UID/auth/FileInfo/cmd13/cmd8
-        ↓
-recording priority ends
-        ↓
-fresh camera producer starts
-        ↓
-existing preserved consumers receive media again
-```
+- camera producer stops and releases the local operation lock;
+- H264/AAC HTTP/go2rtc consumers remain subscribed;
+- no intentional EOF is sent to those queues;
+- recording runs with priority;
+- after recording a fresh camera producer starts against the preserved consumers.
 
-Implementation rule in `ReolinkBatteryLiveHub._finish_producer()`:
+Normal non-recording Live View termination still emits EOF normally.
 
-```text
-preserve_consumers = recording_priority_depth > 0
-```
-
-If recording priority is active:
-
-- do **not** enqueue `None`/EOF to video or audio queues;
-- retain queues registered by existing go2rtc HTTP requests;
-- count preserved finish/consumer telemetry;
-- clear only producer task and producer stop event.
-
-If recording priority is not active:
-
-- retain the previous normal behavior;
-- publish `None` to consumers so a genuine Live View end/error still closes the HTTP stream cleanly.
-
-`async_resume_after_recording()` starts a new producer whenever preserved/queued consumers exist and recording priority depth returns to zero.
-
-This preserves the v1.3.10 starvation fix without requiring concurrent camera sessions.
-
----
-
-## 11. New v1.3.11 Live View diagnostics
-
-In addition to the v1.3.10 fields:
-
-```text
-recording_priority_active
-recording_priority_depth
-recording_preemptions
-```
-
-v1.3.11 adds:
+Diagnostics added:
 
 ```text
 recording_preserved_finishes
 recording_preserved_consumers
 ```
 
+Expected physical behavior: the image may temporarily freeze/pause while recording owns the camera, but it should resume rather than remain permanently dead.
+
+---
+
+## 11. Why v1.3.12 was requested
+
+The user asked for two usability/recovery controls after discussing restart behavior:
+
+1. a Home Assistant sensor showing how many recordings are still queued;
+2. a manual button to explicitly attempt downloading missing queued recordings.
+
+The key design requirement is to preserve the battery-safe automatic policy:
+
+```text
+Restart alone must NOT turn an old backlog into repeated camera wakes.
+```
+
+But a deliberate user press may safely say:
+
+```text
+I explicitly want the integration to try this old backlog now.
+```
+
+---
+
+## 12. v1.3.12 — queued recordings sensor
+
+New Home Assistant sensor:
+
+```text
+translation key: recordings_queued
+English: Recordings queued
+Hebrew: סרטונים בתור
+unique id suffix: _recordings_queued
+icon: mdi:video-outline
+```
+
+The native value counts only pending events whose source is:
+
+```text
+android_notification
+```
+
+It does not count unrelated cloud events because only Android notification events are part of the current automatic recording workflow.
+
+The sensor only appears when the notification bridge/recording worker is configured.
+
+The sensor reads only the in-memory persistent queue and **never contacts the camera**.
+
+Additional attributes:
+
+```text
+deferred
+fresh_automatic
+stale
+```
+
+Definitions:
+
+- `deferred`: pending Android events currently excluded from normal automatic processing;
+- `fresh_automatic`: pending Android events that are non-deferred and still inside the normal automatic freshness window;
+- `stale`: pending Android events older than the automatic freshness window.
+
+The sensor is polling from Home Assistant's in-memory state only; polling this entity does not wake/contact the Argus or cloud.
+
+---
+
+## 13. v1.3.12 — explicit missing-recordings recovery button
+
+New Home Assistant button:
+
+```text
+translation key: recover_pending_recordings
+English: Download missing recordings
+Hebrew: הורד סרטונים חסרים
+unique id suffix: _recover_pending_recordings
+icon: mdi:download-multiple
+```
+
+The button only appears when the notification bridge/recording worker is configured and is available only while at least one pending Android notification event exists.
+
+### Exact semantics on button press
+
+The button calls:
+
+```text
+recording_worker.async_request_manual_recovery()
+```
+
+That method:
+
+1. takes a snapshot of all currently pending `android_notification` events;
+2. explicitly rearms any of those events that are deferred;
+3. adds every current pending Android event ID to a dedicated manual-recovery set;
+4. also activates those IDs in the serialized worker;
+5. signals the worker trigger;
+6. does **not** directly open a camera session inside the button handler.
+
+### What manual mode changes
+
+For event selection, a manual-recovery event is eligible even if it is older than the normal automatic 10-minute window.
+
+The stale-event deferral pass deliberately skips IDs in the manual-recovery set.
+
+This is the only freshness bypass.
+
+### What manual mode does NOT change
+
+Manual backlog recovery still uses the normal worker pipeline:
+
+```text
+settle calculation
+-> recording priority over Live View
+-> UID discovery
+-> local auth
+-> FileInfo lookup
+-> cmd13
+-> cmd8
+-> exact-size verification
+-> persistent completed fingerprint
+-> ready event
+```
+
+It still retains:
+
+- max 3 attempts per event;
+- normal 30/60 retry policy for ordinary failures;
+- v1.3.8/v1.3.9 3/6-second fast recovery after proven partial stream failure;
+- newer-motion retry preemption;
+- Live View recording-priority arbitration;
+- exact MP4 verification;
+- partial-file cleanup;
+- completed-recording dedupe;
+- persistent event completion only after verified success/dedupe.
+
+If manual work fails all attempts it is deferred again and removed from the manual-recovery set.
+
+If manual work succeeds or is deduplicated, it is removed from the manual-recovery set and from the persistent pending queue through the existing completion path.
+
+### Manual recovery ordering
+
+Current selector remains newest-first across eligible explicit/manual and normal fresh work. This preserves the existing policy that newly arriving real motion should not wait behind very old backlog.
+
+After a newer event is handled, remaining manual backlog stays eligible and continues through the serialized worker.
+
+---
+
+## 14. New v1.3.12 diagnostics
+
+`recording_worker.policy_diagnostics()` now adds:
+
+```text
+manual_recovery_requests
+manual_recovery_last_queued
+manual_recovery_rearmed
+manual_recovery_remaining
+manual_recovery_policy = explicit_button_all_pending
+```
+
 Interpretation:
 
-- `recording_preemptions >= 1`: an active Live View producer was asked to yield for recording.
-- `recording_preserved_finishes >= 1`: producer cleanup occurred while recording priority was active and consumer queues were intentionally preserved.
-- `recording_preserved_consumers`: cumulative number of H264/AAC consumer queues preserved across those producer finishes.
-- `recording_priority_active` should return to `false` after each recording attempt.
-- `recording_priority_depth` should normally return to `0` after an attempt.
+- `manual_recovery_requests`: number of explicit recovery button requests in the current runtime;
+- `manual_recovery_last_queued`: count of Android pending events selected by the last button press;
+- `manual_recovery_rearmed`: cumulative number of deferred events rearmed by manual requests;
+- `manual_recovery_remaining`: number of events from the manual-recovery set that still remain pending;
+- `manual_recovery_policy`: confirms that only the explicit all-pending button path bypasses automatic freshness.
 
-These fields are secret-safe and contain no credentials, addresses or filenames.
-
----
-
-## 12. What v1.3.11 deliberately does NOT change
-
-Do not attribute unrelated recording behavior to this patch. v1.3.11 does not intentionally change:
-
-- Android notification matching;
-- persistent queue/backlog policy;
-- 600-second automatic freshness window;
-- 60-second initial settle;
-- three-attempt bound;
-- normal 30/60 retry timing;
-- v1.3.8/v1.3.9 partial-stream 3/6 fast recovery;
-- newer-motion retry preemption;
-- FileInfo selection;
-- cmd13 framing/body;
-- cmd8 full-high/mainStream framing/body;
-- returned handle use;
-- authenticated recording session handoff;
-- P2P heartbeat cadence;
-- fresh heartbeat TIDs;
-- periodic UDP ACK cadence;
-- inclusive-highest ACK behavior;
-- verified collector sizing;
-- exact-size MP4 acceptance;
-- atomic file finalization;
-- partial-file deletion;
-- recording fingerprint deduplication;
-- single local camera session invariant.
-
-The patch is strictly about keeping Live View HTTP/go2rtc consumers alive while the camera producer temporarily yields for recording.
+Existing `deferred_rearmed_count` is also incremented when the manual button rearms deferred events.
 
 ---
 
-## 13. Important source files
+## 15. Important restart behavior after v1.3.12
 
-Integration/runtime wiring:
+v1.3.12 **does not** change automatic startup recovery.
+
+After Home Assistant restart:
+
+- at most the newest fresh non-deferred Android event is automatically selected;
+- stale events are not automatically downloaded;
+- deferred events are not automatically downloaded;
+- old backlog therefore does not repeatedly wake a battery camera after every restart.
+
+The new button is the explicit escape hatch for that backlog.
+
+Example:
 
 ```text
-custom_components/reolink_battery/__init__.py
-custom_components/reolink_battery/diagnostics.py
-custom_components/reolink_battery/go2rtc_bridge.py
+sensor: סרטונים בתור = 17
+attributes:
+  deferred: 17
+  fresh_automatic: 0
+  stale: 17
 ```
 
-Live View:
+Restart alone:
 
 ```text
-custom_components/reolink_battery/camera.py
-custom_components/reolink_battery/live_http.py
-custom_components/reolink_battery/live_stream.py
+no automatic old-backlog wake
 ```
 
-Automatic recording worker:
+User presses:
 
 ```text
-custom_components/reolink_battery/recording_worker.py
+הורד סרטונים חסרים
+```
+
+Then:
+
+```text
+all 17 current Android pending events are explicitly marked for recovery
+-> deferred entries are rearmed
+-> worker begins serialized recovery
+```
+
+The user should expect battery usage during this explicitly requested bulk recovery.
+
+---
+
+## 16. Files changed for v1.3.12
+
+Worker/manual recovery:
+
+```text
 custom_components/reolink_battery/recording_worker_v138.py
 ```
 
-Recording/download chain:
+Home Assistant entities:
 
 ```text
-custom_components/reolink_battery/recording_probe.py
-custom_components/reolink_battery/recording_download_probe.py
-custom_components/reolink_battery/recording_download_probe_beta20.py
-custom_components/reolink_battery/recording_download_probe_beta21.py
-custom_components/reolink_battery/recording_download_beta22.py
+custom_components/reolink_battery/sensor.py
+custom_components/reolink_battery/button.py
 ```
 
-Tests relevant to current work:
+Translations:
 
 ```text
-tests/test_recording_live_priority.py
-tests/test_recording_stream_recovery_v138.py
-tests/test_recording_backlog_policy.py
-tests/test_notification_bridge.py
-tests/test_integration_load.py
-tests/test_release_checkpoint.py
+custom_components/reolink_battery/strings.json
+custom_components/reolink_battery/translations/en.json
+custom_components/reolink_battery/translations/he.json
+```
+
+Regression coverage:
+
+```text
+tests/test_manual_recovery_controls.py
+.github/workflows/validate.yaml
+```
+
+Release docs:
+
+```text
+custom_components/reolink_battery/manifest.json
+CHANGELOG.md
+CHECKPOINT.md
+docs/checkpoints/v1.3.12.md
 ```
 
 ---
 
-## 14. Important interpretation rules for diagnostics
+## 17. Regression coverage added in v1.3.12
 
-### A. `recording_worker.running: true` is not proof of network activity
+`tests/test_manual_recovery_controls.py` verifies source-level policy contracts including:
 
-A worker can be inside an attempt while still blocked before UID discovery. Always correlate with `uid_resolve.*`, stream probe and Live View priority state.
+- explicit `async_request_manual_recovery()` exists;
+- deferred events are rearmed through coordinator API;
+- all current Android pending IDs are added to manual recovery;
+- manual events bypass freshness;
+- ordinary activated automatic events still require freshness;
+- stale automatic deferral excludes explicit manual recovery IDs;
+- completed/failed manual work leaves the manual set;
+- queue sensor counts Android events only;
+- queue attributes exist;
+- recovery button invokes the worker recovery API;
+- Hebrew labels `סרטונים בתור` and `הורד סרטונים חסרים` exist.
 
-### B. Current stream probe may be zeroed during a newer attempt
+The normal validation workflow also still runs:
 
-The worker resets stream telemetry at attempt start. Use `recording_worker.prior_attempt` for immediately previous transfer evidence.
+```text
+compileall
+release checkpoint consistency
+notification bridge regression tests
+recording backlog policy regression tests
+incomplete stream recovery regression tests
+recording vs Live View priority regression tests
+manual recovery controls regression tests
+integration load/startup regression tests
+HACS validation
+```
 
-### C. Do not treat historical UDP unresolved count as final active loss
+Before the version bump, all Python/regression/integration-load tests were green on the feature branch after compatibility cleanup.
+
+---
+
+## 18. What v1.3.12 deliberately does NOT change
+
+Do not attribute future recording-transfer behavior to the queue UI/recovery patch unless diagnostics specifically indicate manual selection issues.
+
+v1.3.12 does not intentionally change:
+
+- notification matching/fingerprint logic;
+- 60-second automatic settle;
+- automatic 600-second freshness window;
+- normal startup recovery rules;
+- max three attempts;
+- normal 30/60 retry delays;
+- partial-stream 3/6 retry delays;
+- cmd13 wire format;
+- cmd8 wire format;
+- FileInfo query shape;
+- full-high/mainStream selection;
+- heartbeat behavior;
+- UDP ACK cadence/bitmap behavior;
+- authoritative collector sizing;
+- exact-size acceptance;
+- partial cleanup;
+- persistent dedupe;
+- Live View consumer-preservation fix from v1.3.11;
+- single-local-session invariant.
+
+---
+
+## 19. Next physical validation after installing v1.3.12
+
+### A. Basic entity check
+
+After HACS update and HA restart confirm diagnostics show:
+
+```text
+version: 1.3.12
+```
+
+With notification bridge configured, confirm the device exposes:
+
+```text
+sensor ... סרטונים בתור
+button ... הורד סרטונים חסרים
+```
+
+The sensor value should approximately match the pending Android backlog previously visible in diagnostics.
+
+### B. Inspect queue attributes
+
+Check:
+
+```text
+deferred
+fresh_automatic
+stale
+```
+
+For the previously accumulated old backlog, most/all may be `deferred` and `stale`.
+
+### C. Manual recovery test
+
+Prefer testing first when Live View is not intentionally open, to isolate queue recovery behavior.
+
+1. Note the queued sensor value.
+2. Press `הורד סרטונים חסרים` once.
+3. Do not repeatedly press the button while the same recovery is already active.
+4. Allow the serialized worker to process.
+5. Export diagnostics after one or more events complete/fail.
+
+Expected manual diagnostics:
+
+```text
+manual_recovery_requests >= 1
+manual_recovery_last_queued > 0
+manual_recovery_rearmed >= 0
+manual_recovery_remaining <= manual_recovery_last_queued
+manual_recovery_policy = explicit_button_all_pending
+```
+
+If deferred backlog existed before the press:
+
+```text
+manual_recovery_rearmed > 0
+```
+
+The queued sensor should decrease as events successfully complete or dedupe.
+
+### D. Recording transport success target
+
+For a successfully recovered event:
+
+```text
+file_saved: true
+final_size_match: true
+atomic_rename_completed: true
+recording_worker.last_file_saved: true
+recording_worker.last_ready_event_fired: true
+```
+
+If the queued event maps to an already completed recording, it may disappear through dedupe without a second cmd13/cmd8 or Telegram send. That is correct.
+
+### E. If a manual event still fails
+
+Inspect:
+
+```text
+recording_worker.last_failure_stage
+recording_worker.last_failure_type
+recording_worker.prior_attempt.*
+recording_worker.uid_resolve.*
+download_prepare.stream_probe.*
+```
+
+If real media bytes start and end with known signatures, expect existing classifiers:
+
+```text
+STREAM_REMOTE_DISCONNECT_INCOMPLETE
+STREAM_IDLE_TIMEOUT_INCOMPLETE
+```
+
+Do not redesign queue recovery because of a transport-layer partial stream; analyze the media transport evidence separately.
+
+### F. Combined Live View test after basic recovery validation
+
+After confirming the button works, repeat with Live View open:
+
+Expected if recording starts while Live View owns the producer:
+
+```text
+recording_preemptions >= 1
+recording_preserved_finishes >= 1
+recording_preserved_consumers >= 1
+```
+
+After the recording attempt:
+
+```text
+recording_priority_active: false
+recording_priority_depth: 0
+```
+
+The feed may pause but should resume.
+
+---
+
+## 20. Diagnostics fields most useful next
+
+Version:
+
+```text
+custom_components.reolink_battery.version
+integration_manifest.version
+```
+
+Queue/event state:
+
+```text
+events.pending_count
+events.completed_recording_count
+recording_worker.deferred_count
+recording_worker.persistent_deferred_count
+recording_worker.eligible_fresh_pending_count
+recording_worker.stale_pending_count
+recording_worker.manual_recovery_requests
+recording_worker.manual_recovery_last_queued
+recording_worker.manual_recovery_rearmed
+recording_worker.manual_recovery_remaining
+recording_worker.manual_recovery_policy
+```
+
+Worker:
+
+```text
+recording_worker.running
+recording_worker.pending_trigger
+recording_worker.waiting_camera_closed
+recording_worker.attempts
+recording_worker.retries
+recording_worker.completed
+recording_worker.last_event_time
+recording_worker.last_attempt_time
+recording_worker.last_failure_stage
+recording_worker.last_failure_type
+recording_worker.last_file_saved
+recording_worker.last_ready_event_fired
+recording_worker.prior_attempt.*
+```
+
+UID wake:
+
+```text
+recording_worker.uid_resolve.send_rounds
+recording_worker.uid_resolve.datagrams_sent
+recording_worker.uid_resolve.elapsed_ms
+recording_worker.uid_resolve.succeeded
+```
+
+Stream:
+
+```text
+download_prepare.stream_probe.cmd13_frames
+download_prepare.stream_probe.cmd8_frames
+download_prepare.stream_probe.file_bytes_written
+download_prepare.stream_probe.xml_reported_size
+download_prepare.stream_probe.final_size_match
+download_prepare.stream_probe.file_saved
+download_prepare.stream_probe.termination_reason
+download_prepare.stream_probe.remote_disconnect_observed
+download_prepare.stream_probe.cmd13_udp_ack_received
+download_prepare.stream_probe.cmd8_udp_ack_received
+download_prepare.stream_probe.udp_current_missing_packet_count_at_disconnect
+download_prepare.stream_probe.udp_max_gap_recovery_ms
+```
+
+Live View arbitration:
+
+```text
+live_view.session.active
+live_view.session.video_consumers
+live_view.session.recording_priority_active
+live_view.session.recording_priority_depth
+live_view.session.recording_preemptions
+live_view.session.recording_preserved_finishes
+live_view.session.recording_preserved_consumers
+live_view.session.last_failure_stage
+live_view.session.last_failure_type
+live_view.session.last_session
+```
+
+---
+
+## 21. Important interpretation rules
+
+### A. Queue count is event count, not guaranteed unique physical video count
+
+The new sensor counts pending Android recording events. Several notification events can potentially map to the same physical SD clip. Persistent recording fingerprint dedupe resolves that during processing.
+
+Therefore:
+
+```text
+queued sensor = pending recovery events
+```
+
+not necessarily:
+
+```text
+unique SD MP4 files remaining
+```
+
+### B. Manual recovery is intentionally battery-expensive compared with normal policy
+
+Pressing the button explicitly asks the integration to process old backlog. A large queued count can therefore cause multiple camera wake/download attempts. This is user-initiated behavior, not automatic background behavior.
+
+### C. Do not repeatedly press the recovery button to make it faster
+
+A second press will reselect the current pending snapshot and increment diagnostics, but the worker remains serialized. Repeated presses do not create parallel camera sessions.
+
+### D. `running: true` does not prove network activity
+
+Always correlate worker running state with UID/stream telemetry. v1.3.9 field evidence proved a worker can be blocked before UID discovery if a shared lease is not available; v1.3.10 specifically addressed the known Live View version of that problem.
+
+### E. Current stream probe may reset on a newer attempt
+
+Use `recording_worker.prior_attempt` when diagnostics are captured mid-run after a previous attempt has already failed.
+
+### F. Historical UDP unresolved count is not necessarily current final loss
 
 Prefer current-at-disconnect fields such as:
 
@@ -563,212 +977,105 @@ udp_buffered_out_of_order_at_disconnect
 udp_max_gap_recovery_ms
 ```
 
-### D. Partial MP4 remains invalid even if `ftyp` is valid
+### G. Valid MP4 prefix is not enough
 
-A valid MP4 prefix is not sufficient. Authoritative expected size must match exactly before atomic rename and ready event.
-
-### E. Newer-motion retry preemption is intentional
-
-If `retry_preemptions > 0` and timestamps show a newer fresh event, an old event may legitimately not receive its planned retry.
-
-### F. Live View interruption during recording may still be visible
-
-v1.3.11 preserves HTTP/go2rtc consumers, but the actual camera producer must still stop while recording owns the local camera lease. The image may pause/freeze temporarily. The required improvement is that the feed resumes rather than being permanently ended by an intentional EOF.
+A `.part` containing a valid `ftyp` is still rejected unless final byte count exactly matches authoritative expected size.
 
 ---
 
-## 15. Exact next physical test after v1.3.11
+## 22. Source files that matter most
 
-1. Install v1.3.11 through HACS.
-2. Restart Home Assistant.
-3. Confirm diagnostics show integration version `1.3.11`.
-4. First test Live View by itself and confirm it opens normally.
-5. Keep Live View open.
-6. Trigger one real motion notification in front of `atv`.
-7. Avoid additional motion if possible so retry timing remains interpretable.
-8. Keep the dashboard/Live View open through the 60-second recording settle point.
-9. Allow the recording attempt to complete or clearly fail.
-10. Confirm the Live View resumes after the recording arbitration.
-11. Export integration diagnostics.
-
-Expected arbitration fields if Live View was active when recording began:
+Integration/runtime:
 
 ```text
-recording_preemptions >= 1
-recording_preserved_finishes >= 1
-recording_preserved_consumers >= 1
+custom_components/reolink_battery/__init__.py
+custom_components/reolink_battery/diagnostics.py
+custom_components/reolink_battery/coordinator.py
 ```
 
-After the attempt:
+Notification/queue:
 
 ```text
-recording_priority_active: false
-recording_priority_depth: 0
+custom_components/reolink_battery/notification_bridge.py
+custom_components/reolink_battery/events.py
 ```
 
-The recording worker should not remain stuck for minutes with:
+Worker/policy:
 
 ```text
-running: true
-attempts > 0
-uid_resolve.send_rounds: 0
-uid_resolve.elapsed_ms: null
+custom_components/reolink_battery/recording_worker.py
+custom_components/reolink_battery/recording_worker_v138.py
 ```
 
-UID discovery should begin after the Live View producer yields.
-
-Successful recording target:
+Recording transport:
 
 ```text
-file_saved: true
-final_size_match: true
-atomic_rename_completed: true
-recording_worker.last_file_saved: true
-recording_worker.last_ready_event_fired: true
-```
-
-If the transfer starts but fails with explicit remote close, expect possible:
-
-```text
-STREAM_REMOTE_DISCONNECT_INCOMPLETE
-```
-
-and a ~3-second fast retry unless newer motion preempts it.
-
-If the transfer starts but stalls after real bytes, expect possible:
-
-```text
-STREAM_IDLE_TIMEOUT_INCOMPLETE
-```
-
-and the same fast recovery policy.
-
----
-
-## 16. Fields to inspect in the next diagnostics
-
-Version:
-
-```text
-custom_components.reolink_battery.version
-integration_manifest.version
+custom_components/reolink_battery/recording_probe.py
+custom_components/reolink_battery/recording_download_probe.py
+custom_components/reolink_battery/recording_download_probe_beta20.py
+custom_components/reolink_battery/recording_download_probe_beta21.py
+custom_components/reolink_battery/recording_download_beta22.py
 ```
 
 Live View:
 
 ```text
-live_view.session.active
-live_view.session.video_consumers
-live_view.session.audio_consumers
-live_view.session.sessions_started
-live_view.session.sessions_completed
-live_view.session.recording_priority_active
-live_view.session.recording_priority_depth
-live_view.session.recording_preemptions
-live_view.session.recording_preserved_finishes
-live_view.session.recording_preserved_consumers
-live_view.session.last_failure_stage
-live_view.session.last_failure_type
-live_view.session.last_session
+custom_components/reolink_battery/live_http.py
+custom_components/reolink_battery/live_stream.py
+custom_components/reolink_battery/go2rtc_bridge.py
+custom_components/reolink_battery/camera.py
 ```
 
-Recording worker:
+New v1.3.12 controls:
 
 ```text
-recording_worker.running
-recording_worker.pending_trigger
-recording_worker.waiting_camera_closed
-recording_worker.attempts
-recording_worker.retries
-recording_worker.completed
-recording_worker.retry_preemptions
-recording_worker.last_event_time
-recording_worker.last_attempt_time
-recording_worker.last_failure_stage
-recording_worker.last_failure_type
-recording_worker.last_file_saved
-recording_worker.last_file_size
-recording_worker.last_ready_event_fired
-recording_worker.prior_attempt.*
+custom_components/reolink_battery/sensor.py
+custom_components/reolink_battery/button.py
 ```
 
-UID wake:
+Tests:
 
 ```text
-recording_worker.uid_resolve.timeout_seconds
-recording_worker.uid_resolve.resend_interval_seconds
-recording_worker.uid_resolve.send_rounds
-recording_worker.uid_resolve.datagrams_sent
-recording_worker.uid_resolve.elapsed_ms
-recording_worker.uid_resolve.succeeded
-```
-
-Recording stream:
-
-```text
-download_prepare.stream_probe.cmd13_frames
-download_prepare.stream_probe.cmd8_frames
-download_prepare.stream_probe.cmd8_attempted
-download_prepare.stream_probe.file_write_attempted
-download_prepare.stream_probe.file_bytes_written
-download_prepare.stream_probe.xml_reported_size
-download_prepare.stream_probe.final_size_match
-download_prepare.stream_probe.file_saved
-download_prepare.stream_probe.termination_reason
-download_prepare.stream_probe.elapsed_seconds
-download_prepare.stream_probe.remote_disconnect_observed
-download_prepare.stream_probe.cmd13_udp_ack_received
-download_prepare.stream_probe.cmd8_udp_ack_received
-download_prepare.stream_probe.udp_current_missing_packet_count_at_disconnect
-download_prepare.stream_probe.udp_max_gap_recovery_ms
+tests/test_notification_bridge.py
+tests/test_recording_backlog_policy.py
+tests/test_recording_stream_recovery_v138.py
+tests/test_recording_live_priority.py
+tests/test_manual_recovery_controls.py
+tests/test_integration_load.py
+tests/test_release_checkpoint.py
 ```
 
 ---
 
-## 17. Current release/checkpoint policy
+## 23. New-chat kickoff prompt
 
-For every future release:
-
-1. bump `custom_components/reolink_battery/manifest.json`;
-2. update `CHANGELOG.md`;
-3. update root `CHECKPOINT.md` fully;
-4. create `docs/checkpoints/v<version>.md` with identical bytes;
-5. include new physical evidence, decisions and next validation target;
-6. run compile and all regression tests;
-7. pass HACS validation;
-8. do not publish release if checkpoint consistency fails.
-
-The checkpoint is a release requirement, not optional documentation.
-
----
-
-## 18. New-chat kickoff prompt
-
-Copy this into a new chat:
+Copy/paste this into a new chat:
 
 ```text
 Continue development of Dmxsir/ha-reolink-battery.
 
 First read CHECKPOINT.md completely and treat it as the authoritative handoff.
-Then inspect current main and the latest diagnostics I provide before making a
-new protocol change.
+Then inspect current main and the latest diagnostics I provide before changing
+recording transport or queue semantics.
 
-Current target/release state is v1.3.11 on Reolink Argus 2E.
-The basic recording protocol is physically proven: UID/legacy auth, FileInfo,
-cmd13 handle, full-high/mainStream cmd8, 1-second heartbeat, periodic inclusive-
-highest UDP ACK, exact-size MP4 verification and end-to-end Telegram have all
-worked on real hardware.
+Current release/target state is v1.3.12 on Reolink Argus 2E.
+The recording transport is already physically proven: UID/legacy auth, FileInfo,
+cmd13 handle, full-high/mainStream cmd8, ~1s heartbeat, periodic inclusive-highest
+UDP ACK, exact-size MP4 verification and end-to-end Telegram have worked.
 
-v1.3.8 added fast recovery for partial transfer + connection_closed.
-v1.3.9 added fast recovery for partial transfer + idle_timeout.
-v1.3.10 fixed recording starvation when an indefinitely active Live View held
-local_operation_lock before UID discovery by giving recording priority.
-v1.3.11 fixes the Live View regression in that arbitration: camera producer
-still yields, but H264/AAC HTTP/go2rtc consumer queues are preserved and a fresh
-producer resumes against them after recording instead of sending intentional EOF.
+v1.3.8: fast recovery for partial stream + connection_closed.
+v1.3.9: fast recovery for partial stream + idle_timeout.
+v1.3.10: recording priority prevents indefinitely active Live View from starving
+recording before UID discovery.
+v1.3.11: recording preemption preserves H264/AAC HTTP/go2rtc consumers so Live
+View can resume after recording instead of receiving intentional EOF.
+v1.3.12: adds a queued-recordings sensor and an explicit Download missing
+recordings button. Automatic 10-minute/startup battery policy remains unchanged;
+only explicit button recovery rearms/bypasses freshness for current pending Android
+events, and those events still use the full verified worker path.
 
-Do not rewrite cmd13/cmd8/heartbeat/UDP ACK or change several timing variables at
-once without new field evidence.
+Do not rewrite cmd13/cmd8/heartbeat/UDP ACK or change multiple timing variables at
+once without new physical evidence.
 
 For every future version update, update CHECKPOINT.md and create the matching
 byte-identical docs/checkpoints/v<version>.md before release.
@@ -776,11 +1083,11 @@ byte-identical docs/checkpoints/v<version>.md before release.
 
 ---
 
-## 19. Handoff summary
+## 24. Handoff summary
 
 ```text
-Android notification ingestion                  working
-persistent queue / stale backlog policy         working
+Android notification ingestion                   working
+persistent queue / stale backlog policy          working
 recording fingerprint dedupe                     working
 UID discovery / legacy auth                      physically proven
 FileInfo lookup                                  physically proven
@@ -791,9 +1098,11 @@ partial remote-close fast recovery               implemented v1.3.8
 partial idle-timeout fast recovery               implemented v1.3.9
 Live View starving recording lock                addressed v1.3.10
 recording priority / single local session        retained
-v1.3.10 intentional EOF to go2rtc consumers      identified regression risk
-preserve consumers across recording preemption   implemented v1.3.11
-v1.3.11 physical Live View resume validation     NEXT REQUIRED TEST
+Live View HTTP consumer preservation             implemented v1.3.11
+queued recordings sensor                         implemented v1.3.12
+manual all-pending backlog recovery button       implemented v1.3.12
+automatic startup freshness policy               unchanged / battery-safe
+v1.3.12 physical queue-recovery validation       NEXT REQUIRED TEST
 ```
 
-**Next action:** install v1.3.11, verify Live View alone, then keep Live View open through one real motion event and confirm recording gets priority while the same Live View consumer path resumes afterward. Send diagnostics after that field test before changing recording transport again.
+**Next action:** install/confirm v1.3.12 in Home Assistant, verify `סרטונים בתור` and `הורד סרטונים חסרים`, note the queue attributes, press recovery once, then send diagnostics after the worker processes at least one old/deferred event. Do not alter recording transport again before examining that field result.
