@@ -4,7 +4,7 @@ This layer deliberately leaves the physically validated cmd13/cmd8, heartbeat,
 UDP ACK and file-verification transport unchanged. It changes retry timing when
 a real MP4 transfer ends incomplete, gives recording attempts priority over an
 active on-demand Live View session, and provides explicit manual backlog recovery
-without weakening the automatic 10-minute freshness policy.
+without rearming stale automatic backlog.
 """
 
 from __future__ import annotations
@@ -35,6 +35,43 @@ class RecordingWorker(BaseRecordingWorker):
         self._manual_recovery_rearmed = 0
         self._manual_recovery_last_queued = 0
         self._manual_stale_match_single_attempts = 0
+
+        # v1.3.14: a fresh automatic notification may arrive while the serialized
+        # worker is already inside a long manual/backlog camera operation. The
+        # normal 10-minute freshness clock must not make that accepted event
+        # disappear before it receives its first worker attempt. This is runtime
+        # admission credit only: it never rearms deferred backlog and is consumed
+        # immediately when the first attempt starts.
+        self._automatic_first_attempt_credit_event_ids: set[str] = set()
+        self._automatic_first_attempt_credits_granted = 0
+        self._automatic_late_first_attempts = 0
+        self._last_automatic_late_first_attempt_event_time: datetime | None = None
+
+    def notify(self, event_id: str) -> None:
+        """Activate an event and preserve one first attempt if it is fresh now.
+
+        The credit is intentionally created only by the normal automatic notify
+        path while the event is fresh. Manual recovery adds IDs directly to its
+        own set, so old backlog does not gain this automatic freshness bypass.
+        """
+        super().notify(event_id)
+        now = datetime.now(UTC)
+        coordinator = self._entry.runtime_data.coordinator
+        event = next(
+            (
+                candidate
+                for candidate in coordinator.pending_events
+                if candidate.event_id == event_id
+                and candidate.source == "android_notification"
+            ),
+            None,
+        )
+        if (
+            event is not None
+            and not coordinator.is_event_deferred(event.event_id)
+            and self._is_fresh(event, now)
+        ):
+            self._automatic_first_attempt_credit_event_ids.add(event.event_id)
 
     async def async_request_manual_recovery(self) -> int:
         """Explicitly activate every pending Android event, including stale ones.
@@ -75,7 +112,7 @@ class RecordingWorker(BaseRecordingWorker):
         return len(event_ids)
 
     def _next_android_event(self, now: datetime | None = None):
-        """Return newest explicit manual work or normal fresh automatic work."""
+        """Return newest eligible manual/fresh/first-attempt-credit work."""
         now = now or datetime.now(UTC)
         coordinator = self._entry.runtime_data.coordinator
         candidates = (
@@ -85,6 +122,7 @@ class RecordingWorker(BaseRecordingWorker):
             and not coordinator.is_event_deferred(event.event_id)
             and (
                 event.event_id in self._manual_recovery_event_ids
+                or event.event_id in self._automatic_first_attempt_credit_event_ids
                 or (
                     event.event_id in self._activated_event_ids
                     and self._is_fresh(event, now)
@@ -94,11 +132,13 @@ class RecordingWorker(BaseRecordingWorker):
         return max(candidates, key=self._event_time, default=None)
 
     async def _defer_stale_activated_events(self, now: datetime) -> None:
-        """Defer stale automatic work, but never stale explicit manual work."""
+        """Defer stale automatic work except a fresh-at-activation first attempt."""
         for event in self._entry.runtime_data.coordinator.pending_events:
             if (
                 event.event_id in self._activated_event_ids
                 and event.event_id not in self._manual_recovery_event_ids
+                and event.event_id
+                not in self._automatic_first_attempt_credit_event_ids
                 and not self._is_fresh(event, now)
             ):
                 await self._defer_event(event, "automatic_event_stale")
@@ -107,6 +147,25 @@ class RecordingWorker(BaseRecordingWorker):
     async def _defer_event(self, event, reason: str) -> None:
         await super()._defer_event(event, reason)
         self._manual_recovery_event_ids.discard(event.event_id)
+        self._automatic_first_attempt_credit_event_ids.discard(event.event_id)
+
+    def _consume_automatic_first_attempt_credit(
+        self,
+        event,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Consume runtime credit immediately before the event's first attempt."""
+        if event.event_id not in self._automatic_first_attempt_credit_event_ids:
+            return False
+
+        self._automatic_first_attempt_credit_event_ids.discard(event.event_id)
+        self._automatic_first_attempt_credits_granted += 1
+        now = now or datetime.now(UTC)
+        if not self._is_fresh(event, now):
+            self._automatic_late_first_attempts += 1
+            self._last_automatic_late_first_attempt_event_time = self._event_time(event)
+        return True
 
     def _manual_stale_match_is_terminal(self, event) -> bool:
         """Return True for an old explicit recovery event with no SD match.
@@ -124,7 +183,7 @@ class RecordingWorker(BaseRecordingWorker):
         )
 
     def policy_diagnostics(self) -> dict[str, object]:
-        """Extend base policy diagnostics with explicit recovery state."""
+        """Extend base policy diagnostics with explicit recovery/admission state."""
         data = super().policy_diagnostics()
         pending_ids = {
             event.event_id
@@ -142,6 +201,23 @@ class RecordingWorker(BaseRecordingWorker):
                 "manual_recovery_policy": "explicit_button_all_pending",
                 "manual_stale_match_single_attempts": self._manual_stale_match_single_attempts,
                 "manual_stale_match_retry_policy": "single_attempt_then_defer",
+                "automatic_first_attempt_credit_pending": len(
+                    pending_ids.intersection(
+                        self._automatic_first_attempt_credit_event_ids
+                    )
+                ),
+                "automatic_first_attempt_credits_granted": (
+                    self._automatic_first_attempt_credits_granted
+                ),
+                "automatic_late_first_attempts": self._automatic_late_first_attempts,
+                "last_automatic_late_first_attempt_event_time": (
+                    self._last_automatic_late_first_attempt_event_time.isoformat()
+                    if self._last_automatic_late_first_attempt_event_time is not None
+                    else None
+                ),
+                "automatic_first_attempt_credit_policy": (
+                    "fresh_at_activation_until_first_attempt"
+                ),
             }
         )
         return data
@@ -263,10 +339,19 @@ class RecordingWorker(BaseRecordingWorker):
                     if fast_recovery:
                         fast_retry_index += 1
 
+                # Consume only when a real worker attempt is about to start. If
+                # this event became >10 minutes old solely because serialized
+                # manual/backlog work held the worker, it still gets this attempt.
+                if attempt == 0:
+                    self._consume_automatic_first_attempt_credit(event)
+
                 if await self._process_once(event):
                     completed = True
                     self._activated_event_ids.discard(event.event_id)
                     self._manual_recovery_event_ids.discard(event.event_id)
+                    self._automatic_first_attempt_credit_event_ids.discard(
+                        event.event_id
+                    )
                     break
 
                 # Once a real transfer is interrupted, keep all remaining retries
