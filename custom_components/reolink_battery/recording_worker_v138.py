@@ -35,6 +35,9 @@ class RecordingWorker(BaseRecordingWorker):
         self._manual_recovery_rearmed = 0
         self._manual_recovery_last_queued = 0
         self._manual_stale_match_single_attempts = 0
+        self._deferred_clear_requests = 0
+        self._deferred_clear_last_count = 0
+        self._deferred_cleared_total = 0
 
         # v1.3.14: a fresh automatic notification may arrive while the serialized
         # worker is already inside a long manual/backlog camera operation. The
@@ -110,6 +113,26 @@ class RecordingWorker(BaseRecordingWorker):
         self._trigger.set()
         self._refresh_pending_counts()
         return len(event_ids)
+
+    async def async_clear_deferred_recordings(self) -> int:
+        """Explicitly remove dead deferred Android backlog without camera access.
+
+        This is a queue-only user action. It never contacts or wakes the camera,
+        never deletes verified recordings, and preserves processed-event dedupe so
+        the cleared historical Android notifications cannot be ingested again.
+        """
+        removed = await self._entry.runtime_data.coordinator.async_clear_deferred_events(
+            source="android_notification"
+        )
+        self._deferred_clear_requests += 1
+        self._deferred_clear_last_count = len(removed)
+        self._deferred_cleared_total += len(removed)
+        for event_id in removed:
+            self._activated_event_ids.discard(event_id)
+            self._manual_recovery_event_ids.discard(event_id)
+            self._automatic_first_attempt_credit_event_ids.discard(event_id)
+        self._refresh_pending_counts()
+        return len(removed)
 
     def _next_android_event(self, now: datetime | None = None):
         """Return newest eligible manual/fresh/first-attempt-credit work."""
@@ -201,6 +224,10 @@ class RecordingWorker(BaseRecordingWorker):
                 "manual_recovery_policy": "explicit_button_all_pending",
                 "manual_stale_match_single_attempts": self._manual_stale_match_single_attempts,
                 "manual_stale_match_retry_policy": "single_attempt_then_defer",
+                "deferred_clear_requests": self._deferred_clear_requests,
+                "deferred_clear_last_count": self._deferred_clear_last_count,
+                "deferred_cleared_total": self._deferred_cleared_total,
+                "deferred_clear_policy": "explicit_button_deferred_android_only",
                 "automatic_first_attempt_credit_pending": len(
                     pending_ids.intersection(
                         self._automatic_first_attempt_credit_event_ids
