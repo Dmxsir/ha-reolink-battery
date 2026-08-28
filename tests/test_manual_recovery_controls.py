@@ -24,11 +24,13 @@ class ManualRecoveryControlTests(unittest.TestCase):
         source = WORKER.read_text(encoding="utf-8")
         tree = ast.parse(source)
         worker = next(
-            node for node in tree.body
+            node
+            for node in tree.body
             if isinstance(node, ast.ClassDef) and node.name == "RecordingWorker"
         )
         next_event = next(
-            node for node in worker.body
+            node
+            for node in worker.body
             if isinstance(node, ast.FunctionDef) and node.name == "_next_android_event"
         )
         segment = ast.get_source_segment(source, next_event) or ""
@@ -36,7 +38,8 @@ class ManualRecoveryControlTests(unittest.TestCase):
         self.assertIn("self._is_fresh(event, now)", segment)
 
         defer_stale = next(
-            node for node in worker.body
+            node
+            for node in worker.body
             if isinstance(node, ast.AsyncFunctionDef)
             and node.name == "_defer_stale_activated_events"
         )
@@ -52,6 +55,39 @@ class ManualRecoveryControlTests(unittest.TestCase):
             2,
         )
 
+    def test_stale_manual_recording_match_error_is_single_attempt(self) -> None:
+        source = WORKER.read_text(encoding="utf-8")
+        self.assertIn('MANUAL_STALE_MATCH_FAILURE_STAGE = "RECORDING_MATCH_ERROR"', source)
+        self.assertIn(
+            'MANUAL_STALE_MATCH_DEFER_REASON = "manual_stale_recording_match_miss"',
+            source,
+        )
+        self.assertIn("def _manual_stale_match_is_terminal", source)
+        self.assertIn("event.event_id in self._manual_recovery_event_ids", source)
+        self.assertIn("not self._is_fresh(event, datetime.now(UTC))", source)
+        self.assertIn("if self._manual_stale_match_is_terminal(event):", source)
+        self.assertIn("manual_stale_match_single_attempts", source)
+        self.assertIn("single_attempt_then_defer", source)
+
+    def test_transient_uid_failures_are_not_terminal_manual_match_failures(self) -> None:
+        source = WORKER.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        worker = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "RecordingWorker"
+        )
+        classifier = next(
+            node
+            for node in worker.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_manual_stale_match_is_terminal"
+        )
+        segment = ast.get_source_segment(source, classifier) or ""
+        self.assertIn("MANUAL_STALE_MATCH_FAILURE_STAGE", segment)
+        self.assertNotIn("UID_RESOLVE_ERROR", segment)
+        self.assertNotIn("AUTH_ERROR", segment)
+
     def test_queue_sensor_counts_android_events_only(self) -> None:
         source = SENSOR.read_text(encoding="utf-8")
         self.assertIn("class ReolinkRecordingQueueSensor", source)
@@ -60,6 +96,17 @@ class ManualRecoveryControlTests(unittest.TestCase):
         self.assertIn('"deferred"', source)
         self.assertIn('"fresh_automatic"', source)
         self.assertIn('"stale"', source)
+        self.assertIn('"recovery_remaining"', source)
+        self.assertIn('"worker_running"', source)
+        self.assertIn('"waiting_camera_closed"', source)
+
+    def test_separate_deferred_and_recovery_remaining_sensors_exist(self) -> None:
+        source = SENSOR.read_text(encoding="utf-8")
+        self.assertIn("class ReolinkRecordingDeferredSensor", source)
+        self.assertIn('translation_key="recordings_deferred"', source)
+        self.assertIn("class ReolinkRecordingRecoveryRemainingSensor", source)
+        self.assertIn('translation_key="recovery_remaining"', source)
+        self.assertIn('policy_diagnostics().get("manual_recovery_remaining"', source)
 
     def test_recovery_button_calls_worker_api(self) -> None:
         source = BUTTON.read_text(encoding="utf-8")
@@ -70,6 +117,8 @@ class ManualRecoveryControlTests(unittest.TestCase):
     def test_hebrew_entity_names_are_present(self) -> None:
         source = HE.read_text(encoding="utf-8")
         self.assertIn("סרטונים בתור", source)
+        self.assertIn("סרטונים שנדחו", source)
+        self.assertIn("נותרו בשחזור", source)
         self.assertIn("הורד סרטונים חסרים", source)
 
 

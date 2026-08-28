@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.13 — Smart manual recovery and clearer queue state
+- Uses field evidence from the v1.3.12 backlog test to stop wasting 30/60-second retries when an explicitly requested **stale** manual-recovery event reaches `RECORDING_MATCH_ERROR`: that historical event now gets one FileInfo matching attempt, is deferred with reason `manual_stale_recording_match_miss`, and the worker immediately advances to the next backlog item.
+- Keeps normal bounded retries for fresh events and for transient failures such as `UID_RESOLVE_ERROR`, authentication/wake races, and other ordinary worker failures. A sleeping camera therefore still gets retry opportunities.
+- Keeps the v1.3.8/v1.3.9 3/6-second fast-recovery policy for proven partial MP4 stream failures.
+- Adds diagnostics `manual_stale_match_single_attempts` and `manual_stale_match_retry_policy=single_attempt_then_defer`.
+- Adds separate Home Assistant sensors `Recordings deferred` / `סרטונים שנדחו` and `Recovery remaining` / `נותרו בשחזור` alongside the existing queued-recordings sensor.
+- Extends `Recordings queued` attributes with `recovery_remaining`, `worker_running`, and `waiting_camera_closed` so the queue can be interpreted without exporting diagnostics.
+- The new queue sensors only inspect in-memory coordinator/worker state and never contact the cloud or wake the battery camera.
+- Leaves the automatic 60-second settle, 10-minute freshness rule, startup/deferred battery-safety policy, newest-motion preemption, completed-recording dedupe, Live View arbitration, cmd13/cmd8 framing, heartbeat, UDP ACK logic, and exact-size MP4 verification unchanged.
+
 ## v1.3.12 — Queue visibility and explicit backlog recovery
 - Adds a Home Assistant sensor `Recordings queued` / `סרטונים בתור` that counts pending Android recording events without contacting or waking the camera.
 - Adds queue-state attributes for `deferred`, `fresh_automatic`, and `stale` so the visible count can be interpreted without opening diagnostics.
@@ -96,7 +106,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.12` is the next stable patch release prepared from the v1.3.11 baseline.
+- `v1.3.13` is the next stable patch release prepared from the v1.3.12 field-tested baseline.
 - Every version bump must include matching root/archive checkpoints before release.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.

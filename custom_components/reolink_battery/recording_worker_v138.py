@@ -21,6 +21,8 @@ from .recording_worker import (
 INCOMPLETE_STREAM_FAILURE_STAGE = "STREAM_REMOTE_DISCONNECT_INCOMPLETE"
 INCOMPLETE_STREAM_IDLE_FAILURE_STAGE = "STREAM_IDLE_TIMEOUT_INCOMPLETE"
 INCOMPLETE_STREAM_RETRY_DELAYS_SECONDS = (3.0, 6.0)
+MANUAL_STALE_MATCH_FAILURE_STAGE = "RECORDING_MATCH_ERROR"
+MANUAL_STALE_MATCH_DEFER_REASON = "manual_stale_recording_match_miss"
 
 
 class RecordingWorker(BaseRecordingWorker):
@@ -32,6 +34,7 @@ class RecordingWorker(BaseRecordingWorker):
         self._manual_recovery_requests = 0
         self._manual_recovery_rearmed = 0
         self._manual_recovery_last_queued = 0
+        self._manual_stale_match_single_attempts = 0
 
     async def async_request_manual_recovery(self) -> int:
         """Explicitly activate every pending Android event, including stale ones.
@@ -105,6 +108,21 @@ class RecordingWorker(BaseRecordingWorker):
         await super()._defer_event(event, reason)
         self._manual_recovery_event_ids.discard(event.event_id)
 
+    def _manual_stale_match_is_terminal(self, event) -> bool:
+        """Return True for an old explicit recovery event with no SD match.
+
+        A stale manual event has already waited far beyond the recording settle
+        window. If FileInfo cannot map that old notification to an SD recording,
+        waiting another 30/60 seconds cannot make that historical clip appear.
+        Fresh/manual events keep normal retries because the recording may still be
+        finalizing, and transient wake/auth/UID failures also keep normal retries.
+        """
+        return (
+            event.event_id in self._manual_recovery_event_ids
+            and not self._is_fresh(event, datetime.now(UTC))
+            and self.state.last_failure_stage == MANUAL_STALE_MATCH_FAILURE_STAGE
+        )
+
     def policy_diagnostics(self) -> dict[str, object]:
         """Extend base policy diagnostics with explicit recovery state."""
         data = super().policy_diagnostics()
@@ -122,6 +140,8 @@ class RecordingWorker(BaseRecordingWorker):
                     pending_ids.intersection(self._manual_recovery_event_ids)
                 ),
                 "manual_recovery_policy": "explicit_button_all_pending",
+                "manual_stale_match_single_attempts": self._manual_stale_match_single_attempts,
+                "manual_stale_match_retry_policy": "single_attempt_then_defer",
             }
         )
         return data
@@ -222,6 +242,7 @@ class RecordingWorker(BaseRecordingWorker):
             preempted = False
             fast_recovery = False
             fast_retry_index = 0
+            defer_reason = "automatic_retries_exhausted"
 
             for attempt in range(MAX_ATTEMPTS_PER_TRIGGER):
                 if self._stopped.is_set():
@@ -255,8 +276,17 @@ class RecordingWorker(BaseRecordingWorker):
                 if self._classify_incomplete_stream_failure():
                     fast_recovery = True
 
+                # Old explicit backlog is different from a fresh recording race:
+                # once FileInfo says there is no matching historical recording,
+                # another 30/60-second retry only burns time and battery. Keep
+                # retries for UID/auth/transport and for any still-fresh event.
+                if self._manual_stale_match_is_terminal(event):
+                    self._manual_stale_match_single_attempts += 1
+                    defer_reason = MANUAL_STALE_MATCH_DEFER_REASON
+                    break
+
             if not completed and not preempted:
-                await self._defer_event(event, "automatic_retries_exhausted")
+                await self._defer_event(event, defer_reason)
 
             await self._defer_stale_activated_events(datetime.now(UTC))
             event = self._next_android_event()
