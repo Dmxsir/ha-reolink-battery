@@ -275,6 +275,26 @@ class EventQueue:
     def rearm(self, event_id: str) -> bool:
         return self._deferred.pop(event_id, None) is not None
 
+    def discard_deferred(self, event_ids: Iterable[str]) -> tuple[str, ...]:
+        """Remove only selected deferred pending events and keep dedupe history."""
+        requested = set(event_ids)
+        if not requested:
+            return ()
+        removed = tuple(
+            event.event_id
+            for event in self._pending
+            if event.event_id in requested and event.event_id in self._deferred
+        )
+        if not removed:
+            return ()
+        removed_set = set(removed)
+        self._pending = [
+            event for event in self._pending if event.event_id not in removed_set
+        ]
+        for event_id in removed:
+            self._deferred.pop(event_id, None)
+        return removed
+
     def load(self, data: object) -> None:
         if not isinstance(data, dict):
             return

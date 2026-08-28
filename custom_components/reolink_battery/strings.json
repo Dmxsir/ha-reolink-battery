@@ -56,7 +56,8 @@
       "refresh_device_status": {"name": "Refresh device status"},
       "find_pending_recording": {"name": "Find pending recording"},
       "prepare_pending_recording_download": {"name": "Prepare pending recording download"},
-      "recover_pending_recordings": {"name": "Download missing recordings"}
+      "recover_pending_recordings": {"name": "Download missing recordings"},
+      "clear_deferred_recordings": {"name": "Clear deferred recordings"}
     },
     "camera": {"live_view": {"name": "Live view"}}
   }

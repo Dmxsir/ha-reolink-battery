@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.15 — Clear proven-dead deferred backlog explicitly
+- Adds a Home Assistant button `Clear deferred recordings` / `נקה סרטונים שנדחו` for queue entries that have already been persistently deferred after failed automatic/manual recovery.
+- The cleanup is deliberately queue-only: it does not contact or wake the battery camera, does not query UID/auth/FileInfo, does not execute cmd13/cmd8, and does not delete verified MP4 files.
+- Removes only pending events whose source is `android_notification` and whose event ID is currently marked deferred; fresh/non-deferred events are not touched.
+- Preserves processed-event IDs after cleanup so a historical Android notification cannot be re-ingested as new work, and preserves completed-recording fingerprints so physical recording dedupe history is unchanged.
+- Clears matching runtime activation/manual-recovery/first-attempt-credit ID sets after persistent queue removal and refreshes queue diagnostics.
+- Adds secret-safe cleanup telemetry: `deferred_clear_requests`, `deferred_clear_last_count`, `deferred_cleared_total`, and `deferred_clear_policy=explicit_button_deferred_android_only`.
+- Adds regression coverage proving selected deferred entries are removed, unselected/non-deferred entries remain, storage round-trip does not restore cleared events, and processed-event dedupe prevents re-enqueueing the same historical ID.
+- Motivated by physical v1.3.14 field evidence: manual recovery reduced pending recordings from 15 to 5 with 10 successful completions; a second recovery pass on the remaining five produced seven attempts/two retries, zero completions, and left the queue at 5/5 pending/deferred.
+- Leaves Android notification matching, v1.3.14 first-attempt credit, v1.3.13 stale-match retry policy, FileInfo matching, cmd13/cmd8 framing, heartbeat, UDP ACK behavior, exact-size MP4 verification, Live View arbitration and persistent recording dedupe unchanged.
+
 ## v1.3.14 — Protect fresh motion from manual-recovery starvation
 - Fixes a field-observed queue starvation path where a fresh Android motion notification could be accepted and queued while the serialized recording worker was already busy with a long manual/backlog camera operation, then exceed the normal 10-minute freshness window before the worker became free and be deferred without ever receiving a first recording attempt.
 - Adds a runtime-only first-attempt credit for automatic Android events that are fresh at the moment the normal `notify(event_id)` path activates them.
@@ -117,7 +128,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.14` is the next stable patch release prepared from the v1.3.13 field-tested baseline.
+- `v1.3.15` is the next stable patch release prepared from the v1.3.14 field-tested baseline.
 - Every version bump must include matching root/archive checkpoints before release.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.

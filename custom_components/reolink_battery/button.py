@@ -23,6 +23,7 @@ REFRESH_DESCRIPTION = ButtonEntityDescription(key="refresh_device_status", trans
 FIND_RECORDING_DESCRIPTION = ButtonEntityDescription(key="find_pending_recording", translation_key="find_pending_recording")
 PREPARE_DOWNLOAD_DESCRIPTION = ButtonEntityDescription(key="prepare_pending_recording_download", translation_key="prepare_pending_recording_download")
 RECOVER_RECORDINGS_DESCRIPTION = ButtonEntityDescription(key="recover_pending_recordings", translation_key="recover_pending_recordings")
+CLEAR_DEFERRED_RECORDINGS_DESCRIPTION = ButtonEntityDescription(key="clear_deferred_recordings", translation_key="clear_deferred_recordings")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ReolinkBatteryConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -32,7 +33,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ReolinkBatteryConfigEntr
         ReolinkPreparePendingRecordingDownloadButton(entry),
     ]
     if entry.runtime_data.recording_worker is not None:
-        entities.append(ReolinkRecoverPendingRecordingsButton(entry))
+        entities.extend(
+            [
+                ReolinkRecoverPendingRecordingsButton(entry),
+                ReolinkClearDeferredRecordingsButton(entry),
+            ]
+        )
     async_add_entities(entities)
 
 
@@ -252,3 +258,38 @@ class ReolinkRecoverPendingRecordingsButton(ButtonEntity):
         queued = await worker.async_request_manual_recovery()
         if queued <= 0:
             raise HomeAssistantError("NO_PENDING_NOTIFICATION_EVENT")
+
+
+class ReolinkClearDeferredRecordingsButton(ButtonEntity):
+    """Explicitly discard deferred Android queue entries without camera access."""
+    _attr_has_entity_name = True
+    _attr_should_poll = True
+    _attr_icon = "mdi:playlist-remove"
+    entity_description = CLEAR_DEFERRED_RECORDINGS_DESCRIPTION
+
+    def __init__(self, entry: ReolinkBatteryConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_UID]}_clear_deferred_recordings"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._entry.data[CONF_UID])})
+
+    @property
+    def available(self) -> bool:
+        runtime = self._entry.runtime_data
+        if runtime.recording_worker is None:
+            return False
+        deferred = runtime.coordinator.deferred_event_ids
+        return any(
+            event.source == "android_notification" and event.event_id in deferred
+            for event in runtime.coordinator.pending_events
+        )
+
+    async def async_press(self) -> None:
+        worker = self._entry.runtime_data.recording_worker
+        if worker is None:
+            raise HomeAssistantError("RECORDING_WORKER_UNAVAILABLE")
+        cleared = await worker.async_clear_deferred_recordings()
+        if cleared <= 0:
+            raise HomeAssistantError("NO_DEFERRED_NOTIFICATION_EVENT")
