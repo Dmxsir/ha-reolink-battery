@@ -183,6 +183,29 @@ class ReolinkBatteryCoordinator:
             await self._store.async_save(self._queue.as_storage())
         return changed
 
+    async def async_clear_deferred_events(
+        self,
+        *,
+        source: str | None = None,
+    ) -> tuple[str, ...]:
+        """Permanently discard selected deferred pending events from the queue.
+
+        Processed-event IDs and completed-recording fingerprints are intentionally
+        retained, so clearing dead backlog does not make an old Android
+        notification eligible to be ingested again and never deletes MP4 files.
+        """
+        deferred_ids = self._queue.deferred_event_ids
+        candidates = tuple(
+            event.event_id
+            for event in self._queue.pending
+            if event.event_id in deferred_ids
+            and (source is None or event.source == source)
+        )
+        removed = self._queue.discard_deferred(candidates)
+        if removed:
+            await self._store.async_save(self._queue.as_storage())
+        return removed
+
     async def async_poll(self) -> int:
         """Poll one recent cloud-only window and enqueue new events."""
         now = datetime.now(UTC)
