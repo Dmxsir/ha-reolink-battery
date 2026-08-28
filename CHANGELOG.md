@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.14 — Protect fresh motion from manual-recovery starvation
+- Fixes a field-observed queue starvation path where a fresh Android motion notification could be accepted and queued while the serialized recording worker was already busy with a long manual/backlog camera operation, then exceed the normal 10-minute freshness window before the worker became free and be deferred without ever receiving a first recording attempt.
+- Adds a runtime-only first-attempt credit for automatic Android events that are fresh at the moment the normal `notify(event_id)` path activates them.
+- Exempts credited events from stale deferral until their first real worker attempt begins and includes credited events in newest-first selection even if they aged past 10 minutes while waiting behind already-running work.
+- Consumes the credit immediately before the first attempt. Once an event has started, the existing bounded retry behavior remains unchanged.
+- Does not grant automatic first-attempt credit to already-stale backlog, deferred events, or events activated only through manual recovery. Manual recovery retains its explicit separate freshness bypass.
+- Keeps startup battery safety unchanged: the credit is intentionally runtime-only and is not persisted across Home Assistant restart, so stale backlog still does not wake the camera merely because HA restarted.
+- Adds diagnostics `automatic_first_attempt_credit_pending`, `automatic_first_attempt_credits_granted`, `automatic_late_first_attempts`, `last_automatic_late_first_attempt_event_time`, and `automatic_first_attempt_credit_policy=fresh_at_activation_until_first_attempt`.
+- Adds deterministic regression coverage for the exact field scenario: an automatic event accepted fresh, worker busy for more than 10 minutes (including a 27-minute simulation), old manual work still present, and the fresh-at-activation event remains the next candidate instead of being deferred stale.
+- Leaves cmd13/cmd8 framing, FileInfo matching, heartbeat, UDP ACK behavior, exact-size MP4 verification, Live View arbitration, 60-second settle, three-attempt bound, manual stale-match optimization, and persistent recording dedupe unchanged.
+
 ## v1.3.13 — Smart manual recovery and clearer queue state
 - Uses field evidence from the v1.3.12 backlog test to stop wasting 30/60-second retries when an explicitly requested **stale** manual-recovery event reaches `RECORDING_MATCH_ERROR`: that historical event now gets one FileInfo matching attempt, is deferred with reason `manual_stale_recording_match_miss`, and the worker immediately advances to the next backlog item.
 - Keeps normal bounded retries for fresh events and for transient failures such as `UID_RESOLVE_ERROR`, authentication/wake races, and other ordinary worker failures. A sleeping camera therefore still gets retry opportunities.
@@ -106,7 +117,7 @@
 - Established the proven post-auth fresh heartbeat TID behavior, 1-second heartbeat, 10 ms periodic-only inclusive-highest ACK behavior, reliable cmd13/cmd8 delivery, full-high/mainStream routing, exact-size MP4 verification, and successful Telegram end-to-end delivery.
 
 ## Release policy
-- `v1.3.13` is the next stable patch release prepared from the v1.3.12 field-tested baseline.
+- `v1.3.14` is the next stable patch release prepared from the v1.3.13 field-tested baseline.
 - Every version bump must include matching root/archive checkpoints before release.
 - Keep `v0.1.2-beta.45` available as a diagnostic reference; do not rewrite or retag it.
 - Do not delete `recording_download_beta*.py` modules merely because they retain beta-era names; the stable path still inherits behavior from several of those modules.
