@@ -12,7 +12,7 @@
   },
   "options": {"step": {"init": {"title": "Motion notification bridge", "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Recording delivery is intentionally left to Home Assistant automations.", "data": {"notification_entity": "Notification source entity"}, "data_description": {"notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge."}}}},
   "entity": {
-    "sensor": {"battery": {"name": "Battery"}, "storage_total": {"name": "Storage total"}, "storage_used": {"name": "Storage used"}, "storage_free": {"name": "Storage free"}, "wifi_signal": {"name": "Wi-Fi signal"}, "last_local_refresh": {"name": "Last local refresh"}, "recordings_queued": {"name": "Recordings queued"}},
+    "sensor": {"battery": {"name": "Battery"}, "storage_total": {"name": "Storage total"}, "storage_used": {"name": "Storage used"}, "storage_free": {"name": "Storage free"}, "wifi_signal": {"name": "Wi-Fi signal"}, "last_local_refresh": {"name": "Last local refresh"}, "recordings_queued": {"name": "Recordings queued"}, "recordings_deferred": {"name": "Recordings deferred"}, "recovery_remaining": {"name": "Recovery remaining"}},
     "binary_sensor": {"charging": {"name": "Charging"}},
     "button": {"refresh_device_status": {"name": "Refresh device status"}, "find_pending_recording": {"name": "Find pending recording"}, "prepare_pending_recording_download": {"name": "Prepare pending recording download"}, "recover_pending_recordings": {"name": "Download missing recordings"}},
     "camera": {"live_view": {"name": "Live view"}}
