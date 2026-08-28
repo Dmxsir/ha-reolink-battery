@@ -28,6 +28,8 @@ jobs:
         run: python tests/test_recording_backlog_policy.py
       - name: Fresh automatic first-attempt regression tests
         run: python tests/test_fresh_automatic_first_attempt_v1314.py
+      - name: Deferred recording cleanup regression tests
+        run: python tests/test_clear_deferred_recordings_v1315.py
       - name: Incomplete stream recovery regression tests
         run: python tests/test_recording_stream_recovery_v138.py
       - name: Recording vs Live View priority regression tests
