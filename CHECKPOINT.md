@@ -1,9 +1,9 @@
 # Reolink Battery Development Checkpoint
 
-**Checkpoint version:** v1.3.14  
+**Checkpoint version:** v1.3.15  
 **Checkpoint date:** 2026-08-28  
 **Repository:** `Dmxsir/ha-reolink-battery`  
-**Release target:** `v1.3.14`  
+**Release target:** `v1.3.15`  
 **Primary field-test camera:** Reolink Argus 2E  
 **Home Assistant field environment:** HA 2026.8.2 / HA OS 18.2 / Python 3.14.6 / x86_64  
 **Camera firmware observed:** `0616_722_52_478`  
@@ -15,7 +15,7 @@
 
 This is the authoritative handoff for continuing development of `Dmxsir/ha-reolink-battery`.
 
-The Argus 2E recording transport is physically proven. Current work is reliability hardening, battery-safe queue policy and Home Assistant usability. Do not rediscover or rewrite cmd13/cmd8 because a worker/UI/queue test fails.
+The Argus 2E recording transport is physically proven. Current work is reliability hardening, battery-safe queue policy and Home Assistant usability. Do not rediscover or rewrite cmd13/cmd8 because a queue/UI/worker test fails.
 
 Every future version bump must:
 
@@ -71,6 +71,8 @@ Preserve these unless new physical evidence deliberately changes them:
 11. Partial MP4 files never become final recordings.
 12. Exact authoritative expected size is required before final save/ready event.
 13. Completed-recording fingerprints prevent duplicate downloads/sends of the same physical SD clip.
+14. Clearing dead deferred backlog must be an explicit user action, queue-only, and must never wake/contact the camera or delete verified MP4 files.
+15. Cleared historical event IDs remain in processed-event dedupe so an old Android notification cannot be re-ingested as new work.
 
 ---
 
@@ -118,7 +120,7 @@ Do not refactor beta-named transport modules during unrelated queue/reliability 
 
 ---
 
-## 5. Queue/worker baseline before v1.3.14
+## 5. Current queue/worker policy
 
 ```text
 RECORDING_SETTLE_SECONDS = 60.0
@@ -130,15 +132,22 @@ deferred_rearm_policy = explicit_only
 startup_recovery_policy = newest_fresh_non_deferred_only
 retry_preemption_policy = newer_notification_before_retry
 recording_dedupe_policy = persistent_candidate_fingerprint_before_cmd13
+manual_stale_match_retry_policy = single_attempt_then_defer
+automatic_first_attempt_credit_policy = fresh_at_activation_until_first_attempt
+deferred_clear_policy = explicit_button_deferred_android_only
 ```
 
-Important behavior retained:
+Important behavior:
 
 - fresh motion may preempt an older event during a retry wait;
 - an active camera/download attempt is never cancelled by newer motion;
 - stale backlog persists but does not automatically wake the camera;
 - explicit manual recovery may process stale backlog;
-- duplicate notification events may complete through persistent recording fingerprint dedupe before cmd13/cmd8.
+- old manual `RECORDING_MATCH_ERROR` gets one attempt then immediate defer;
+- a fresh automatic event accepted while the worker is busy keeps one runtime first-attempt credit until its first real attempt begins;
+- the first-attempt credit is runtime-only and is not restored after HA restart;
+- duplicate notification events may complete through persistent recording fingerprint dedupe before cmd13/cmd8;
+- explicit deferred cleanup removes only deferred Android pending entries and preserves processed-event and completed-recording history.
 
 ---
 
@@ -151,227 +160,353 @@ v1.3.10 recording priority over Live View
 v1.3.11 preserve Live View HTTP/go2rtc consumers during recording priority
 v1.3.12 queued/deferred visibility + explicit all-pending manual recovery
 v1.3.13 stale manual RECORDING_MATCH_ERROR -> one attempt then defer
+v1.3.14 fresh-at-activation automatic first-attempt credit
+v1.3.15 explicit queue-only cleanup of dead deferred Android backlog
 ```
-
-v1.3.13 field validation on 2026-08-28 confirmed:
-
-```text
-manual_stale_match_single_attempts: 8
-manual_stale_match_retry_policy: single_attempt_then_defer
-last_deferred_reason: manual_stale_recording_match_miss
-```
-
-This validates the v1.3.13 optimization. Transient UID/auth/wake failures still retain normal retries.
 
 ---
 
-## 7. 2026-08-28 field evidence leading to v1.3.14
+## 7. v1.3.14 field validation — automatic event success
 
-Diagnostics showed a new Reolink Android notification:
+After installing v1.3.14 and restarting Home Assistant, a new Reolink Android motion arrived:
 
 ```text
-last_reolink_notification_time: 2026-08-28T12:44:42.038000+00:00
-local Israel time: 15:44:42
-last_reolink_notification_camera: atv
-last_event_matched: true
-last_camera_mapped: true
-last_event_queued: true
-duplicate_rejected: false
-last_processing_lag_seconds: 0.196
+notification UTC:   2026-08-28T14:00:28.957000+00:00
+Israel local time:  17:00:28
+camera:              atv
+last_event_matched:  true
+last_camera_mapped:  true
+last_event_queued:   true
+duplicate_rejected:  false
+processing lag:      0.248 s
 ```
 
-The user physically confirmed that the only MP4 downloaded and sent to Telegram during the later run was an older **13:52** recording, and that it was delivered at approximately **16:12**.
-
-Diagnostics independently showed:
+The automatic worker gave the event first-attempt credit:
 
 ```text
-recording_worker.last_completed_time:
-2026-08-28T13:12:11.816050+00:00
-local Israel time: 16:12:11
+automatic_first_attempt_credits_granted: 1
+automatic_first_attempt_credit_pending:  0
+automatic_late_first_attempts:           0
 ```
 
-The fresh 15:44 motion was therefore accepted and queued but was not the 16:12 successful recording.
-
-At the diagnostic capture:
+The first attempt started at approximately 17:01:28 local and hit a physically known partial-stream failure:
 
 ```text
-pending_count: 15
-deferred_count: 15
-persistent_deferred_count: 15
-eligible_fresh_pending_count: 0
-stale_pending_count: 15
+failure_stage: STREAM_REMOTE_DISCONNECT_INCOMPLETE
+failure_type: remote_disconnect_before_expected_size
+written: 2,981,888
+expected: 9,421,184
+termination: connection_closed
+uid_resolve_succeeded: true
+```
+
+The existing v1.3.8 short recovery path retried. The second attempt started at approximately 17:02:24 local and completed at approximately 17:04:48 local:
+
+```text
+file_bytes_written:       9,421,184
+xml_reported_size:        9,421,184
+final_size_match:         true
+mp4_ftyp_valid:           true
+fsync_completed:          true
+atomic_rename_completed:  true
+file_saved:               true
+last_ready_event_fired:   true
+termination_reason:       expected_size_reached
+```
+
+Conclusion: v1.3.14 preserved the proven automatic end-to-end path and the partial-stream fast recovery path.
+
+---
+
+## 8. 2026-08-28 manual recovery field run — first pass
+
+Immediately before pressing `Download missing recordings / הורד סרטונים חסרים`:
+
+```text
+pending_count:              15
+completed_recording_count:  35
+worker.attempts:            2
+worker.retries:             1
+worker.completed:           1
+persistent_deferred_count:  15
+manual_recovery_requests:   0
+```
+
+After one explicit recovery pass:
+
+```text
+pending_count:                  5
+completed_recording_count:      45
+worker.attempts:                19
+worker.retries:                 3
+worker.completed:               11
+persistent_deferred_count:      5
+manual_recovery_requests:       1
+manual_recovery_last_queued:    15
+manual_recovery_rearmed:        15
+manual_recovery_remaining:      0
+manual_stale_match_single_attempts: 4
+```
+
+Arithmetic:
+
+```text
+17 new attempts = 15 first attempts + 2 retries
+10 new completed recordings = 45 - 35
+```
+
+Therefore all 15 queued events received work:
+
+- 10 events successfully resolved to recordings and completed;
+- 4 stale historical events hit `RECORDING_MATCH_ERROR` and correctly took one attempt each;
+- 1 remaining event consumed the two additional retries, for three attempts total, and still failed/deferred.
+
+This confirms v1.3.13's failure-aware stale manual retry optimization remains correct while transient failures retain retries.
+
+---
+
+## 9. Second manual recovery pass — proof of dead backlog
+
+A second explicit recovery pass was performed against the remaining five deferred events.
+
+Before second pass:
+
+```text
+pending_count:       5
+worker.attempts:     19
+worker.retries:      3
+worker.completed:    11
+manual_stale_match_single_attempts: 4
+```
+
+After second pass:
+
+```text
+pending_count:       5
+completed_recording_count: 45
+worker.attempts:     26
+worker.retries:      5
+worker.completed:    11
+persistent_deferred_count: 5
+manual_recovery_requests: 2
+manual_recovery_last_queued: 5
+manual_recovery_rearmed: 20
+manual_recovery_remaining: 0
+manual_stale_match_single_attempts: 8
+```
+
+Arithmetic:
+
+```text
+7 new attempts = 4 single attempts + 1 event x 3 attempts
+2 new retries
+0 new completed recordings
+pending stayed 5 -> 5
+```
+
+Conclusion: the five remaining queue entries were demonstrated in two recovery passes to be non-recoverable with the current SD/FileInfo state. Repeated recovery would only wake the battery camera again and spend retries without reducing the queue.
+
+At the end of the second pass:
+
+```text
+worker.running: false
+worker.pending_trigger: false
+worker.waiting_camera_closed: false
 manual_recovery_remaining: 0
 ```
 
-The latest visible failure telemetry had already been overwritten by later old-backlog work, so it did not directly identify the 15:44 event's final disposition.
+No worker operation was stuck.
 
 ---
 
-## 8. Root-cause code analysis
+## 10. v1.3.15 decision — explicit cleanup of dead deferred backlog
 
-The worker is serialized. If a new notification arrives while `_process_once()` is already executing for an older manual/backlog event, the new notification cannot cancel that active camera operation. That is intentional.
+The visible `Recordings queued / סרטונים בתור` sensor counts pending Android notification events. A deferred event remains pending by design, so the five proven-dead historical events would otherwise leave the visible queue permanently at five.
 
-The problem was what happened after the old operation returned.
-
-The v1.3.13 loop performed:
+v1.3.15 adds an explicit Home Assistant button:
 
 ```text
-finish current active attempt
--> _defer_stale_activated_events(now)
--> _next_android_event()
+Clear deferred recordings / נקה סרטונים שנדחו
 ```
 
-`_defer_stale_activated_events()` deferred activated automatic events older than 600 seconds before `_next_android_event()` could select them.
+The button is intentionally destructive only to queue metadata, not to camera media or verified files.
 
-Therefore this field sequence was possible:
+Behavior:
 
 ```text
-15:44 fresh automatic event accepted and activated
--> worker is already busy with old/manual work
--> active work continues until about 16:12
--> fresh event is now about 27 minutes old
--> stale sweep runs before next selection
--> event can be deferred without a first attempt
+user presses Clear deferred recordings
+-> select pending events where source == android_notification
+   AND event_id is currently deferred
+-> remove those entries from pending queue
+-> remove their deferred metadata
+-> save queue once
+-> clean matching runtime worker ID sets
+-> refresh queue counts
 ```
 
-This is a queue-admission starvation bug, not evidence of a cmd13/cmd8 transport regression.
+Explicit exclusions:
+
+- does not contact or wake the camera;
+- does not query UID, auth, FileInfo, cmd13 or cmd8;
+- does not delete any MP4 file;
+- does not remove completed-recording fingerprints;
+- does not remove processed-event IDs;
+- does not remove a fresh/non-deferred pending event;
+- does not clear non-Android deferred events through this button.
+
+Keeping processed-event IDs is intentional: if Android/Companion later surfaces the same historical notification again, the cleared event remains deduplicated and cannot silently repopulate the queue.
 
 ---
 
-## 9. v1.3.14 fix — fresh-at-activation first-attempt credit
+## 11. v1.3.15 implementation
 
-Implemented only in:
+### Event queue
 
-```text
-custom_components/reolink_battery/recording_worker_v138.py
-```
+`custom_components/reolink_battery/events.py`
 
-New runtime policy:
+Adds:
 
 ```text
-IF an Android automatic event reaches normal notify(event_id)
-AND it is non-deferred
-AND it is fresh at that moment
-THEN grant one runtime first-attempt credit
-
-WHILE credit is pending
-- stale sweep must not defer that event
-- newest-event selection may select it even after it ages past 600 seconds
-
-IMMEDIATELY BEFORE its first real worker attempt
-- consume the credit
-
-AFTER the attempt begins
-- existing bounded retry behavior remains unchanged
+EventQueue.discard_deferred(event_ids)
 ```
 
-The credit is deliberately **runtime-only**.
+It removes only requested event IDs that are both pending and deferred. It leaves `_processed` and `_completed_recordings` unchanged.
 
-It is not persisted across Home Assistant restart. This preserves the existing startup invariant that stale backlog does not wake the battery camera merely because HA restarted.
+### Coordinator
 
-Manual recovery does not call the automatic `notify()` path for backlog IDs and therefore does not manufacture automatic first-attempt credit for old events.
+`custom_components/reolink_battery/coordinator.py`
 
-Already-stale automatic events also receive no credit.
+Adds:
 
-Deferred events receive no credit.
+```text
+async_clear_deferred_events(source=None)
+```
+
+The Home Assistant button calls it with:
+
+```text
+source = android_notification
+```
+
+The coordinator saves queue storage once after the bulk removal.
+
+### Worker
+
+`custom_components/reolink_battery/recording_worker_v138.py`
+
+Adds:
+
+```text
+async_clear_deferred_recordings()
+```
+
+After coordinator removal it discards removed IDs from:
+
+```text
+_activated_event_ids
+_manual_recovery_event_ids
+_automatic_first_attempt_credit_event_ids
+```
+
+and refreshes pending/deferred counters.
+
+### Home Assistant button
+
+`custom_components/reolink_battery/button.py`
+
+Adds:
+
+```text
+ReolinkClearDeferredRecordingsButton
+translation_key = clear_deferred_recordings
+icon = mdi:playlist-remove
+```
+
+The button is available only when at least one pending Android event is currently deferred.
 
 ---
 
-## 10. Selection behavior after v1.3.14
+## 12. New v1.3.15 diagnostics
 
-Eligible candidates now include:
+Secret-safe runtime counters:
 
 ```text
-explicit manual recovery event
-OR fresh-at-activation automatic event with unconsumed first-attempt credit
-OR normal activated automatic event that is still fresh
+deferred_clear_requests
+deferred_clear_last_count
+deferred_cleared_total
+deferred_clear_policy = explicit_button_deferred_android_only
 ```
 
-Selection remains newest-first by event time.
+For the current physical field state, after upgrading to v1.3.15 and pressing the new cleanup button once, the expected result is approximately:
 
-This means a new motion that arrived during a long manual-recovery camera operation will be selected ahead of the older manual backlog once the active operation finishes, even if the new event aged past ten minutes while waiting.
+```text
+deferred_clear_requests:   1
+deferred_clear_last_count: 5
+deferred_cleared_total:    5
+pending_count:              0
+persistent_deferred_count:  0
+```
 
-An active camera/download attempt is still not cancelled.
-
-Retry-wait preemption remains unchanged.
+provided no new notification arrives between upgrade and button press.
 
 ---
 
-## 11. New diagnostics
-
-Secret-safe policy telemetry added:
-
-```text
-automatic_first_attempt_credit_pending
-automatic_first_attempt_credits_granted
-automatic_late_first_attempts
-last_automatic_late_first_attempt_event_time
-automatic_first_attempt_credit_policy
-```
-
-Expected policy value:
-
-```text
-automatic_first_attempt_credit_policy =
-fresh_at_activation_until_first_attempt
-```
-
-Interpretation:
-
-- `credit_pending`: accepted automatic events still owed their first attempt;
-- `credits_granted`: credits consumed because first attempts actually started;
-- `automatic_late_first_attempts`: first attempts that began after the event was already older than the normal 600-second freshness window;
-- `last_automatic_late_first_attempt_event_time`: event timestamp of the latest such case.
-
-No raw path, UID, IP address, recording filename or secret is exposed.
-
----
-
-## 12. Regression coverage
+## 13. Regression coverage
 
 New test:
 
 ```text
-tests/test_fresh_automatic_first_attempt_v1314.py
+tests/test_clear_deferred_recordings_v1315.py
 ```
 
 It verifies:
 
-1. an event accepted fresh receives runtime credit;
-2. after simulating more than 10 minutes of worker delay, stale sweep does not defer it before the first attempt;
-3. `_next_android_event()` still selects it;
-4. consuming the credit records a late first attempt;
-5. once credit is consumed, normal stale deferral can apply again outside an active selected attempt;
-6. an event already stale at `notify()` receives no credit;
-7. an old manual event plus a fresh automatic event delayed by **27 minutes** selects the automatic event first.
+1. only selected deferred pending events are removed;
+2. non-deferred pending events remain untouched;
+3. non-selected deferred events remain untouched;
+4. processed-event count/history is retained;
+5. after storage round-trip a cleared event does not return;
+6. re-enqueueing the same cleared historical event ID is rejected by processed-event dedupe;
+7. coordinator cleanup is persisted;
+8. worker cleanup is Android-only and removes matching runtime IDs;
+9. the Home Assistant button calls only the queue cleanup worker API;
+10. English/Hebrew entity names exist;
+11. the cleanup layer does not reimplement cmd13/cmd8/ACK transport.
 
-CI workflow now runs this regression alongside the existing queue, stream-recovery, Live View, manual-recovery and integration-load suites.
+CI runs this regression alongside all existing suites.
 
 ---
 
-## 13. Files changed for v1.3.14
+## 14. Files changed for v1.3.15
 
 ```text
+custom_components/reolink_battery/events.py
+custom_components/reolink_battery/coordinator.py
 custom_components/reolink_battery/recording_worker_v138.py
-tests/test_fresh_automatic_first_attempt_v1314.py
+custom_components/reolink_battery/button.py
+custom_components/reolink_battery/strings.json
+custom_components/reolink_battery/translations/en.json
+custom_components/reolink_battery/translations/he.json
+tests/test_clear_deferred_recordings_v1315.py
 .github/workflows/validate.yaml
 custom_components/reolink_battery/manifest.json
 CHANGELOG.md
 CHECKPOINT.md
-docs/checkpoints/v1.3.14.md
+docs/checkpoints/v1.3.15.md
 ```
 
 No recording transport module is intentionally changed.
 
 ---
 
-## 14. What v1.3.14 deliberately does NOT change
+## 15. What v1.3.15 deliberately does NOT change
 
 Unchanged:
 
-- notification bridge matching/fingerprint logic;
+- Android notification matching/fingerprint logic;
 - 60-second recording settle;
 - 600-second definition of normal automatic freshness;
+- v1.3.14 fresh-at-activation first-attempt credit;
 - startup stale/deferred policy;
 - explicit manual recovery semantics;
 - v1.3.13 stale manual `RECORDING_MATCH_ERROR` single-attempt optimization;
@@ -389,65 +524,79 @@ Unchanged:
 - authoritative collector sizing;
 - exact-size acceptance;
 - partial cleanup;
-- persistent recording dedupe;
+- persistent recording fingerprint dedupe;
 - Live View consumer preservation;
 - single-local-session invariant.
 
 ---
 
-## 15. Next physical validation
+## 16. Next physical validation after installing v1.3.15
 
-After installing v1.3.14:
-
-1. Confirm diagnostics version is `1.3.14`.
-2. Do **not** press recovery merely to validate normal motion.
-3. Create a fresh motion event while the worker is idle and confirm normal download/Telegram behavior remains unchanged.
-4. For the specific starvation test, manual recovery may be started only if there is safe backlog available, then create a fresh motion while the worker is inside an older active attempt.
-5. If the fresh event passes 10 minutes before the worker becomes free, expected diagnostics are:
+1. Update through HACS and restart Home Assistant.
+2. Confirm diagnostics version is `1.3.15`.
+3. Before pressing cleanup, confirm the current old field state is still approximately:
 
 ```text
-automatic_first_attempt_credits_granted >= 1
-automatic_late_first_attempts >= 1
-last_automatic_late_first_attempt_event_time = <fresh motion timestamp>
+Recordings queued:   5
+Recordings deferred: 5
+Recovery remaining:  0
 ```
 
-6. The event must receive a real recording attempt instead of disappearing into `automatic_event_stale` before its first attempt.
-7. Successful verified MP4 must still fire `reolink_battery_recording_ready` and continue to Telegram through the existing automation.
-8. Old stale backlog after HA restart must remain dormant unless explicit manual recovery is pressed.
+4. Press **`נקה סרטונים שנדחו`** once.
+5. Do not expect camera activity; this action must be queue-only.
+6. Confirm:
+
+```text
+Recordings queued:   0
+Recordings deferred: 0
+```
+
+unless a genuinely new Android notification arrived in the meantime.
+7. Export diagnostics and verify:
+
+```text
+deferred_clear_requests >= 1
+deferred_clear_last_count = 5   # expected for the current field state
+deferred_cleared_total >= 5
+```
+
+8. Confirm `worker.attempts` and `worker.retries` did not increase because of the cleanup button.
+9. Create one fresh motion after cleanup and confirm the normal automatic download/Telegram path still works.
 
 ---
 
-## 16. New-chat kickoff
+## 17. New-chat kickoff
 
 ```text
 Continue development of Dmxsir/ha-reolink-battery.
 
 Read CHECKPOINT.md completely first and treat it as authoritative.
-Current release target is v1.3.14 on Reolink Argus 2E.
+Current release target is v1.3.15 on Reolink Argus 2E.
 
 The recording transport is physically proven. Do not rewrite cmd13/cmd8,
 heartbeat, UDP ACK or exact-size MP4 verification without new physical evidence.
 
-v1.3.13 was physically validated: stale manual RECORDING_MATCH_ERROR events
-receive one attempt then defer.
+v1.3.14 was physically validated on 2026-08-28: a fresh automatic motion at
+17:00:28 Israel downloaded successfully after the first transfer ended partial
+at 2,981,888 / 9,421,184 and the existing fast retry completed the exact MP4.
 
-A 2026-08-28 field run then exposed automatic-event starvation: a motion at
-15:44 was accepted/queued while old manual work remained active; the only MP4
-delivered at 16:12 was the older 13:52 recording. Code analysis found that stale
-automatic deferral ran before next-event selection, allowing an accepted fresh
-event to age beyond 10 minutes and be deferred without a first attempt.
+Manual recovery then reduced backlog from 15 to 5 and completed 10 recordings.
+A second recovery pass against those five produced 7 more attempts, 2 retries,
+0 completions and left pending/deferred at 5. Four were repeated stale
+RECORDING_MATCH_ERROR single-attempt misses and the fifth exhausted 3 attempts.
 
-v1.3.14 adds runtime fresh-at-activation first-attempt credit. It never rearms
-old backlog and is not persisted across restart. A credited event remains
-eligible until its first worker attempt begins, after which existing bounded
-retry behavior applies.
+v1.3.15 adds an explicit queue-only button `Clear deferred recordings` /
+`נקה סרטונים שנדחו`. It removes only pending Android events currently marked
+deferred, preserves processed-event dedupe and completed-recording fingerprints,
+does not delete MP4 files and never contacts/wakes the camera.
 
-Next required step is physical validation of v1.3.14.
+Next physical validation: install v1.3.15, press the new cleanup button once,
+expect queued/deferred 5 -> 0 and no increase in recording worker attempts.
 ```
 
 ---
 
-## 17. Handoff summary
+## 18. Handoff summary
 
 ```text
 Android notification ingestion                     working
@@ -458,16 +607,12 @@ FileInfo lookup                                    physically proven
 cmd13/cmd8 request shape                           physically proven
 full exact MP4 download                            physically proven
 recording-ready / Telegram end-to-end              physically proven
-partial remote-close fast recovery                 v1.3.8
+partial remote-close fast recovery                 v1.3.8, physically revalidated 2026-08-28
 partial idle-timeout fast recovery                 v1.3.9
 recording priority over Live View                  v1.3.10
 Live View consumer preservation                    v1.3.11
 queued recordings + manual recovery                v1.3.12
 stale manual match-miss optimization               v1.3.13 physically validated
-fresh automatic starvation root cause              identified 2026-08-28
-fresh-at-activation first-attempt credit            v1.3.14
-v1.3.14 regression test                            added
-v1.3.14 physical validation                        NEXT REQUIRED TEST
+fresh automatic starvation protection              v1.3.14 physically validated normal path
+explicit dead deferred backlog cleanup             v1.3.15 pending field validation
 ```
-
-**Next action:** run CI for the v1.3.14 branch, then physically validate that a fresh automatic motion arriving during long manual work still receives its first recording attempt after the worker becomes available.
