@@ -15,11 +15,14 @@ class Beta45Cmd13ReportedSizeCollectorTests(unittest.TestCase):
         self.assertIn("self._stream_trace.xml_reported_size", source)
         self.assertIn("if frame.cmd_id == 13 and frame.response_code in (0, 200):", source)
         self.assertIn("self._apply_reported_size_collector_limits()", source)
-        observe = source[source.index("    def _observe_frame"):source.index("    def _remove_part")]
-        self.assertLess(
-            observe.index("self._apply_reported_size_collector_limits()"),
-            observe.index("self._persist_new_mp4_bytes()"),
-        )
+        self.assertIn("await self._async_finalize_collected_file()", source)
+        observe = source[
+            source.index("    def _observe_frame") : source.index(
+                "    def _release_collected_media"
+            )
+        ]
+        self.assertNotIn("open(", observe)
+        self.assertNotIn("write(", observe)
 
     def test_argus_17921985_cmd13_size_gets_22116289_limit(self):
         expected = 17_921_985

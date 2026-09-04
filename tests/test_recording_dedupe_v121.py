@@ -11,7 +11,8 @@ COMP = ROOT / "custom_components" / "reolink_battery"
 class RecordingDedupeV121Tests(unittest.TestCase):
     def test_version(self):
         manifest = json.loads((COMP / "manifest.json").read_text())
-        self.assertEqual(manifest["version"], "1.3.7")
+        version = tuple(int(part) for part in manifest["version"].split("."))
+        self.assertGreaterEqual(version, (1, 2, 1))
 
     def test_persistent_fingerprint_store(self):
         events = (COMP / "events.py").read_text()

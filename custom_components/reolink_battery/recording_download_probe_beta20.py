@@ -39,6 +39,11 @@ STREAM_SAMPLE_MAX_BYTES = 16 * 1024 * 1024
 STREAM_SAMPLE_MAX_FRAMES = 4096
 
 
+def _age_seconds(now: float, timestamp: float) -> float | None:
+    """Return a rounded monotonic age, or None when no event was observed."""
+    return round(max(0.0, now - timestamp), 3) if timestamp else None
+
+
 @dataclass(slots=True)
 class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     """Secret-safe telemetry for transport-heartbeat full-transfer testing."""
@@ -94,6 +99,20 @@ class P2PHeartbeatProbeTrace(beta19.FullTransferProbeTrace):
     udp_current_missing_packet_count_at_disconnect: int = 0
     udp_periodic_only_ack_enabled: bool = False
     udp_immediate_ack_suppressed_count: int = 0
+    udp_current_unrecovered_missing_packet_count: int = 0
+    udp_current_buffered_out_of_order: int = 0
+    udp_current_highest_buffered_seq: int | None = None
+    udp_current_expected_next_seq: int | None = None
+    udp_last_media_packet_age_seconds: float | None = None
+    udp_last_contiguous_progress_age_seconds: float | None = None
+    udp_last_gap_recovery_age_seconds: float | None = None
+    udp_max_periodic_ack_delay_ms: float | None = None
+    udp_socket_receive_buffer_configured_bytes: int | None = None
+    udp_socket_receive_buffer_effective_bytes: int | None = None
+    logout_result: str = "not_attempted"
+    transport_cleanup_completed: bool = False
+    transport_cleanup_duration_seconds: float | None = None
+    cleanup_pending_futures_cancelled: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,7 +201,7 @@ def _packet_is_remote_disconnect(data: bytes) -> bool:
         return False
     try:
         decoded = decrypt_udp_baichuan(payload, transaction_id)
-    except Exception:
+    except Exception:  # noqa: BLE001 - malformed encrypted discovery data is ignored.
         return False
     if isinstance(decoded, bytes):
         return b"<D2C_DISC" in decoded
@@ -224,10 +243,16 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         self.udp_current_missing_packet_count_at_disconnect = 0
         self.udp_periodic_only_ack_enabled = True
         self.udp_immediate_ack_suppressed_count = 0
+        self.udp_max_periodic_ack_delay_ms: float | None = None
         self._missing_seq_ids_seen: set[int] = set()
         self._recovered_missing_seq_ids: set[int] = set()
         self._missing_seq_first_seen_at: dict[int, float] = {}
         self._cmd8_delivery_future: asyncio.Future[bool] | None = None
+        self._udp_last_network_datagram_at = 0.0
+        self._udp_last_media_datagram_at = 0.0
+        self._udp_last_contiguous_progress_at = 0.0
+        self._udp_last_gap_recovery_at = 0.0
+        self._udp_last_periodic_ack_at = 0.0
 
 
     def arm_cmd8_delivery_future(self) -> asyncio.Future[bool]:
@@ -266,6 +291,22 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
             if client_id == self.client_id:
                 seq_id = int.from_bytes(data[12:16], "little")
                 self.udp_network_bc_datagrams_received += 1
+                now = self._loop.time()
+                self._udp_last_network_datagram_at = now
+                if self._stream_started:
+                    self._udp_last_media_datagram_at = now
+                expected = self._recv_seq_id + 1
+                if seq_id <= self._recv_seq_id or seq_id in self._seq_data:
+                    self.udp_duplicate_packets += 1
+                elif seq_id > expected:
+                    self.udp_seq_gap_events += 1
+                    self.udp_out_of_order_packets += 1
+                    missing = set(range(expected, seq_id)) - set(self._seq_data)
+                    newly_seen = missing - self._missing_seq_ids_seen
+                    self.udp_missing_packet_count += len(newly_seen)
+                    for missing_seq in newly_seen:
+                        self._missing_seq_first_seen_at.setdefault(missing_seq, now)
+                    self._missing_seq_ids_seen.update(newly_seen)
                 if (
                     self.udp_highest_network_seq_seen is None
                     or seq_id > self.udp_highest_network_seq_seen
@@ -276,6 +317,7 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
                     and seq_id not in self._recovered_missing_seq_ids
                 ):
                     self._recovered_missing_seq_ids.add(seq_id)
+                    self._udp_last_gap_recovery_at = now
                     self.udp_recovered_missing_packet_count = len(
                         self._recovered_missing_seq_ids
                     )
@@ -307,34 +349,52 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         super().parse_udp_ack(port)
 
     def parse_udp_bc(self, port: int) -> None:
-        data = self._udp_data
-        if len(data) >= 20:
-            client_id = int.from_bytes(data[4:8], "little")
-            seq_id = int.from_bytes(data[12:16], "little")
-            if client_id == self.client_id:
-                self.udp_bc_packets_received += 1
-                expected = self._recv_seq_id + 1
-                if seq_id <= self._recv_seq_id:
-                    self.udp_duplicate_packets += 1
-                elif seq_id > expected:
-                    self.udp_seq_gap_events += 1
-                    self.udp_out_of_order_packets += 1
-                    missing = set(range(expected, seq_id))
-                    newly_seen = missing - self._missing_seq_ids_seen
-                    self.udp_missing_packet_count += len(newly_seen)
-                    now = self._loop.time()
-                    for missing_seq in newly_seen:
-                        self._missing_seq_first_seen_at.setdefault(missing_seq, now)
-                    self._missing_seq_ids_seen.update(newly_seen)
-        try:
-            super().parse_udp_bc(port)
-        finally:
+        """Apply reolink-aio's proven reorder semantics without recursive drain."""
+        while True:
+            data = self._udp_data
+            if len(data) < 20:
+                return
+
+            header = data[:20]
+            client_id = int.from_bytes(header[4:8], "little")
+            seq_id = int.from_bytes(header[12:16], "little")
+            payload_size = int.from_bytes(header[16:20], "little")
+            message_length = 20 + payload_size
+            if len(data) < message_length:
+                return
+
+            data_chunk = data[20:message_length]
+            self._udp_data = data[message_length:]
+            try:
+                if client_id == self.client_id:
+                    self.udp_bc_packets_received += 1
+                    if seq_id == self._recv_seq_id + 1:
+                        self._recv_seq_id = seq_id
+                        self._udp_last_contiguous_progress_at = self._loop.time()
+                        self.bc_data_received(data_chunk)
+                    elif seq_id > self._recv_seq_id:
+                        self._seq_data[seq_id] = header + data_chunk
+            finally:
+                self.send_ack()
+
             self.udp_reorder_buffer_peak = max(
                 self.udp_reorder_buffer_peak, len(self._seq_data)
             )
             self.udp_last_contiguous_seq = (
                 self._recv_seq_id if self._recv_seq_id >= 0 else None
             )
+            next_packet = self._seq_data.pop(self._recv_seq_id + 1, None)
+            if next_packet is not None:
+                self._udp_data = next_packet + self._udp_data
+            stale = [
+                buffered_seq
+                for buffered_seq in self._seq_data
+                if buffered_seq <= self._recv_seq_id
+            ]
+            for buffered_seq in stale:
+                self._seq_data.pop(buffered_seq, None)
+            if not self._udp_data:
+                return
 
     def _send_ack_now(self) -> bool:
         """Transmit one inclusive-highest RX ACK snapshot."""
@@ -388,6 +448,18 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         )
         if not will_send:
             return False
+        now = self._loop.time()
+        if self._udp_last_periodic_ack_at:
+            delay_ms = max(
+                0.0,
+                now - self._udp_last_periodic_ack_at - PERIODIC_RX_ACK_INTERVAL,
+            ) * 1000.0
+            if (
+                self.udp_max_periodic_ack_delay_ms is None
+                or delay_ms > self.udp_max_periodic_ack_delay_ms
+            ):
+                self.udp_max_periodic_ack_delay_ms = round(delay_ms, 3)
+        self._udp_last_periodic_ack_at = now
         gap_active = bool(self._seq_data)
         if not self._send_ack_now():
             return False
@@ -395,6 +467,16 @@ class _P2PHeartbeatProbeProtocol(beta17._StreamProbeProtocol):
         if gap_active:
             self.udp_periodic_ack_gap_count += 1
         return True
+
+    def stream_idle_expired(self, now: float, timeout: float) -> bool:
+        """Return whether both media traffic and useful progress are idle."""
+        last_activity = max(
+            self._stream_last_frame_at,
+            self._udp_last_media_datagram_at,
+            self._udp_last_contiguous_progress_at,
+            self._udp_last_gap_recovery_at,
+        )
+        return bool(last_activity and now - last_activity >= timeout)
 
     def parse_udp_connection(self, port: int) -> None:
         if _packet_is_remote_disconnect(self._udp_data):
@@ -453,6 +535,8 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         self._reliable_acked_seq_ids: set[int] = set()
         self._reliable_command_seq: dict[int, int] = {}
         self._reliable_command_retransmits: dict[int, int] = {}
+        self._udp_socket_receive_buffer_configured_bytes: int | None = None
+        self._udp_socket_receive_buffer_effective_bytes: int | None = None
 
     async def _create_connection(self):
         handoff = self._take_handoff_socket()
@@ -464,6 +548,9 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             sock, lease = handoff
         try:
             sock.setblocking(False)
+            self._udp_socket_receive_buffer_effective_bytes = sock.getsockopt(
+                socket.SOL_SOCKET, socket.SO_RCVBUF
+            )
             created = await self._loop.create_datagram_endpoint(
                 lambda: _P2PHeartbeatProbeProtocol(
                     self._loop,
@@ -557,7 +644,27 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
         finally:
             self._reliable_command_retransmits[cmd_id] = retransmits
             self._reliable_ack_waiters.pop(seq_id, None)
+            if not ack_future.done():
+                ack_future.cancel()
         return seq_id
+
+    def _cancel_reliable_ack_waiters(self) -> int:
+        """Cancel command ACK futures before discarding session state."""
+        cancelled = 0
+        for future in self._reliable_ack_waiters.values():
+            if not future.done():
+                future.cancel()
+                cancelled += 1
+        self._reliable_ack_waiters.clear()
+        return cancelled
+
+    def _publish_result_trace(self) -> None:
+        _RESULT_TRACE.set(_clone_trace(self._stream_trace))
+
+    def record_logout_result(self, result: str) -> None:
+        """Record whether bounded best-effort logout returned or timed out."""
+        self._stream_trace.logout_result = result
+        self._publish_result_trace()
 
     def _apply_udp_reliability_trace(
         self,
@@ -656,6 +763,37 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             trace.udp_immediate_ack_suppressed_count = (
                 snapshot_protocol.udp_immediate_ack_suppressed_count
             )
+            unresolved = (
+                snapshot_protocol._missing_seq_ids_seen
+                - snapshot_protocol._recovered_missing_seq_ids
+            )
+            trace.udp_current_unrecovered_missing_packet_count = len(unresolved)
+            trace.udp_current_buffered_out_of_order = len(snapshot_protocol._seq_data)
+            trace.udp_current_highest_buffered_seq = (
+                max(snapshot_protocol._seq_data)
+                if snapshot_protocol._seq_data
+                else None
+            )
+            trace.udp_current_expected_next_seq = snapshot_protocol._recv_seq_id + 1
+            now = self._loop.time()
+            trace.udp_last_media_packet_age_seconds = _age_seconds(
+                now, snapshot_protocol._udp_last_media_datagram_at
+            )
+            trace.udp_last_contiguous_progress_age_seconds = _age_seconds(
+                now, snapshot_protocol._udp_last_contiguous_progress_at
+            )
+            trace.udp_last_gap_recovery_age_seconds = _age_seconds(
+                now, snapshot_protocol._udp_last_gap_recovery_at
+            )
+            trace.udp_max_periodic_ack_delay_ms = (
+                snapshot_protocol.udp_max_periodic_ack_delay_ms
+            )
+        trace.udp_socket_receive_buffer_configured_bytes = (
+            self._udp_socket_receive_buffer_configured_bytes
+        )
+        trace.udp_socket_receive_buffer_effective_bytes = (
+            self._udp_socket_receive_buffer_effective_bytes
+        )
 
     def _construct_udp_mess(self, body: str) -> tuple[bytes, int]:
         packet, transaction_id = super()._construct_udp_mess(body)
@@ -770,17 +908,14 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
 
     async def _p2p_heartbeat_loop(self) -> None:
         """Maintain the adopted P2P lease until the Baichuan session closes."""
-        try:
-            while self.connection_open:
-                await asyncio.sleep(P2P_HEARTBEAT_INTERVAL)
-                if not self.connection_open:
-                    break
-                try:
-                    self._record_p2p_heartbeat()
-                except (OSError, RuntimeError):
-                    break
-        except asyncio.CancelledError:
-            raise
+        while self.connection_open:
+            await asyncio.sleep(P2P_HEARTBEAT_INTERVAL)
+            if not self.connection_open:
+                break
+            try:
+                self._record_p2p_heartbeat()
+            except (OSError, RuntimeError):
+                break
 
     def _start_p2p_heartbeat_loop(self) -> None:
         """Start one immediate heartbeat plus one background sender after handoff."""
@@ -811,20 +946,17 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
 
     async def _periodic_rx_ack_loop(self) -> None:
         """Repeat the current receive ACK state at the official-client cadence."""
-        try:
-            while self.connection_open:
-                await asyncio.sleep(PERIODIC_RX_ACK_INTERVAL)
-                if not self.connection_open:
-                    break
-                protocol = self._protocol
-                if not isinstance(protocol, _P2PHeartbeatProbeProtocol):
-                    break
-                try:
-                    protocol.send_periodic_ack()
-                except (OSError, RuntimeError):
-                    break
-        except asyncio.CancelledError:
-            raise
+        while self.connection_open:
+            await asyncio.sleep(PERIODIC_RX_ACK_INTERVAL)
+            if not self.connection_open:
+                break
+            protocol = self._protocol
+            if not isinstance(protocol, _P2PHeartbeatProbeProtocol):
+                break
+            try:
+                protocol.send_periodic_ack()
+            except (OSError, RuntimeError):
+                break
 
     def _start_periodic_rx_ack_loop(self) -> None:
         """Start exactly one 10 ms receive-ACK repeater for the active UDP session."""
@@ -862,9 +994,28 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
 
     async def close(self) -> None:
         """Stop background ACK/heartbeat senders before closing the session."""
-        await self._stop_periodic_rx_ack_loop()
-        await self._stop_p2p_heartbeat_loop()
-        await super().close()
+        started_at = self._loop.time()
+        cancelled = 0
+        completed = False
+        try:
+            await self._stop_periodic_rx_ack_loop()
+            await self._stop_p2p_heartbeat_loop()
+            cancelled = self._cancel_reliable_ack_waiters()
+            await super().close()
+            completed = True
+        finally:
+            trace = self._stream_trace
+            trace.cleanup_pending_futures_cancelled += cancelled
+            trace.transport_cleanup_completed = completed
+            trace.transport_cleanup_duration_seconds = round(
+                max(0.0, self._loop.time() - started_at), 3
+            )
+            self._reliable_sent_at.clear()
+            self._reliable_ack_delays_ms.clear()
+            self._reliable_acked_seq_ids.clear()
+            self._reliable_command_seq.clear()
+            self._reliable_command_retransmits.clear()
+            self._publish_result_trace()
 
     async def send_file_download_probe(
         self,
@@ -878,7 +1029,9 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
             await self.connect()
         protocol = self._protocol
         if not isinstance(protocol, _P2PHeartbeatProbeProtocol):
-            raise RuntimeError("unexpected beta20 Baichuan UDP protocol")
+            raise RuntimeError(  # noqa: TRY004 - preserved download error contract.
+                "unexpected beta20 Baichuan UDP protocol"
+            )
         if self._cmd8_wire is None or self._cmd8_msg_num is None:
             raise RuntimeError("cmd8 probe was not prepared")
 
@@ -928,8 +1081,7 @@ class _P2PHeartbeatFullTransferConnection(beta19._FullTransferProbeConnection):
                 if now - started_at >= STREAM_HARD_TIMEOUT:
                     reason = "hard_timeout"
                     break
-                last_frame_at = protocol._stream_last_frame_at
-                if last_frame_at and now - last_frame_at >= STREAM_IDLE_TIMEOUT:
+                if protocol.stream_idle_expired(now, STREAM_IDLE_TIMEOUT):
                     reason = "idle_timeout"
                     break
                 await asyncio.sleep(0.05)
@@ -978,7 +1130,7 @@ async def async_prepare_download_for_event(
         except base.CameraStageError as err:
             trace = _RESULT_TRACE.get()
             if trace is not None:
-                setattr(err, "stream_trace", _clone_trace(trace))
+                err.stream_trace = _clone_trace(trace)
             raise
         trace = _RESULT_TRACE.get() or _new_trace(attempted=True)
         if not trace.termination_reason:

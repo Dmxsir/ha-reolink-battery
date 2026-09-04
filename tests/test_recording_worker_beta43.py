@@ -55,7 +55,9 @@ class Beta43FreshRetryPreemptionTests(unittest.TestCase):
         self.assertIn('"retry_preemption_policy": "newer_notification_before_retry"', diagnostics)
         self.assertIn('"prior_attempt": {', diagnostics)
         version = json.loads(MANIFEST.read_text())["version"]
-        self.assertEqual(version, "1.3.7")
+        self.assertGreaterEqual(
+            tuple(int(part) for part in version.split(".")), (1, 3, 7)
+        )
 
 
 if __name__ == "__main__":

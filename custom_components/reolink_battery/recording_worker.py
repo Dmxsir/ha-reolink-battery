@@ -40,6 +40,15 @@ MAX_ATTEMPTS_PER_TRIGGER = 3
 RETRY_DELAYS_SECONDS = (30.0, 60.0)
 
 
+def _file_matches_expected_size(path: Path, expected_size: int) -> bool:
+    """Verify a completed recording without blocking Home Assistant's loop."""
+    return (
+        expected_size > 0
+        and path.is_file()
+        and path.stat().st_size == expected_size
+    )
+
+
 @dataclass(slots=True)
 class RecordingWorkerState:
     """Secret-safe runtime telemetry for the automatic worker."""
@@ -418,7 +427,9 @@ class RecordingWorker:
                 prior_trace, "elapsed_seconds", None
             )
             self.state.prior_stream_file_bytes = int(
-                getattr(prior_trace, "file_bytes_written", 0) or 0
+                getattr(prior_trace, "mp4_bytes_collected", 0)
+                or getattr(prior_trace, "file_bytes_written", 0)
+                or 0
             )
             self.state.prior_stream_expected_size = getattr(
                 prior_trace, "xml_reported_size", None
@@ -515,10 +526,10 @@ class RecordingWorker:
         final_path = output_dir / f"reolink_{candidate_start.strftime('%Y%m%d_%H%M%S')}.mp4"
         expected_size = int(getattr(trace, "final_size", 0) or 0)
         try:
-            file_ok = (
-                expected_size > 0
-                and final_path.is_file()
-                and final_path.stat().st_size == expected_size
+            file_ok = await self._hass.async_add_executor_job(
+                _file_matches_expected_size,
+                final_path,
+                expected_size,
             )
         except OSError as err:
             self.state.last_failure_stage = "RECORDING_FILE_VERIFY_ERROR"
