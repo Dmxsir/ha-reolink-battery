@@ -28,6 +28,12 @@ def _hex_class(value: int | None) -> str | None:
     return f"0x{value:04x}" if isinstance(value, int) else None
 
 
+def _completion_ratio(received: int, expected: int | None) -> float | None:
+    if not expected or expected <= 0:
+        return None
+    return round(max(0, received) / expected, 4)
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ReolinkBatteryConfigEntry
 ) -> dict[str, Any]:
@@ -81,6 +87,7 @@ async def async_get_config_entry_diagnostics(
             "uid": _redacted_uid(entry.data.get(CONF_UID, "")),
         },
         "events": {
+            "counter_lifetime": "persistent_storage",
             "last_successful_event_time": (
                 coordinator.last_successful_event_time.isoformat()
                 if coordinator.last_successful_event_time
@@ -287,6 +294,7 @@ async def async_get_config_entry_diagnostics(
             "first_payload_length": prepare.first_payload_length,
             "first_body_present": prepare.first_payload_length > 0,
             "stream_probe": {
+                "counter_lifetime": "last_transfer",
                 "attempted": stream.attempted,
                 "frame_count": stream.frame_count,
                 "continuation_observed": stream.frame_count > 1,
@@ -430,6 +438,36 @@ async def async_get_config_entry_diagnostics(
                 "udp_immediate_ack_suppressed_count": (
                     stream.udp_immediate_ack_suppressed_count
                 ),
+                "udp_current_unrecovered_missing_packet_count": (
+                    stream.udp_current_unrecovered_missing_packet_count
+                ),
+                "udp_current_buffered_out_of_order": (
+                    stream.udp_current_buffered_out_of_order
+                ),
+                "udp_current_highest_buffered_seq": (
+                    stream.udp_current_highest_buffered_seq
+                ),
+                "udp_current_expected_next_seq": (
+                    stream.udp_current_expected_next_seq
+                ),
+                "udp_last_media_packet_age_seconds": (
+                    stream.udp_last_media_packet_age_seconds
+                ),
+                "udp_last_contiguous_progress_age_seconds": (
+                    stream.udp_last_contiguous_progress_age_seconds
+                ),
+                "udp_last_gap_recovery_age_seconds": (
+                    stream.udp_last_gap_recovery_age_seconds
+                ),
+                "udp_max_periodic_ack_delay_ms": (
+                    stream.udp_max_periodic_ack_delay_ms
+                ),
+                "udp_socket_receive_buffer_configured_bytes": (
+                    stream.udp_socket_receive_buffer_configured_bytes
+                ),
+                "udp_socket_receive_buffer_effective_bytes": (
+                    stream.udp_socket_receive_buffer_effective_bytes
+                ),
                 "remote_disconnect_observed": stream.remote_disconnect_observed,
                 "connection_lost_exception_present": stream.connection_lost_exception_present,
                 "decoded_cmd8_chunks": stream.decoded_cmd8_chunks,
@@ -441,6 +479,11 @@ async def async_get_config_entry_diagnostics(
                 "mp4_offset_found": stream.mp4_offset_found,
                 "mp4_offset": stream.mp4_offset,
                 "mp4_bytes_collected": stream.mp4_bytes_collected,
+                "expected_bytes": stream.xml_reported_size,
+                "received_bytes": stream.mp4_bytes_collected,
+                "completion_ratio": _completion_ratio(
+                    stream.mp4_bytes_collected, stream.xml_reported_size
+                ),
                 "expected_size_reached": stream.expected_size_reached,
                 "expected_size_match": stream.expected_size_match,
                 "bcmedia_prefix_bytes": stream.bcmedia_prefix_bytes,
@@ -467,12 +510,23 @@ async def async_get_config_entry_diagnostics(
                 "sample_limit_reached": stream.termination_reason
                 in {"byte_limit", "frame_limit"},
                 "raw_values_exposed": False,
+                "logout_result": stream.logout_result,
+                "transport_cleanup_completed": (
+                    stream.transport_cleanup_completed
+                ),
+                "transport_cleanup_duration_seconds": (
+                    stream.transport_cleanup_duration_seconds
+                ),
+                "cleanup_pending_futures_cancelled": (
+                    stream.cleanup_pending_futures_cancelled
+                ),
             },
             "media_payload_observed": stream.media_frames > 0,
             "full_media_download_attempted": stream.file_write_attempted,
             "cmd8_attempted": stream.cmd8_attempted,
         },
         "recording_worker": {
+            "counter_lifetime": "config_entry_runtime_since_setup",
             "configured": worker is not None,
             "enabled": bool(worker and worker.state.enabled),
             "running": bool(worker and worker.state.running),
@@ -481,7 +535,7 @@ async def async_get_config_entry_diagnostics(
             "settle_seconds": worker.state.settle_seconds if worker else None,
             "attempts": worker.state.attempts if worker else 0,
             "retries": worker.state.retries if worker else 0,
-            "completed": worker.state.completed if worker else 0,
+            "completed_since_setup": worker.state.completed if worker else 0,
             "deduplicated_recordings": (
                 worker.state.deduplicated_recordings if worker else 0
             ),
@@ -587,7 +641,7 @@ async def async_get_config_entry_diagnostics(
             },
             "raw_path_exposed": False,
         },
-        "milestone": "1.3.1-live-view-diagnostics",
+        "diagnostics_schema": "transport-reliability-v1",
         "camera_worker_enabled": worker is not None,
         "automatic_recording_processing_enabled": worker is not None,
     }

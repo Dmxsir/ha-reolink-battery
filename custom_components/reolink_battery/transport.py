@@ -308,6 +308,9 @@ class _IdempotentUdpClientProtocol(BaichuanUdpClientProtocol):
 
     def clear_file_download_probe(self) -> None:
         """Drop the temporary observer."""
+        future = self._file_download_probe_future
+        if future is not None and not future.done():
+            future.cancel()
         self._file_download_probe_future = None
         self._file_download_expected_msg_num = None
 
@@ -332,8 +335,7 @@ class _IdempotentUdpClientProtocol(BaichuanUdpClientProtocol):
                     response_code = int.from_bytes(raw[16:18], "little")
                     message_class = int.from_bytes(raw[18:20], "little")
                     payload_offset = int.from_bytes(raw[20:24], "little")
-                    if payload_offset > body_length:
-                        payload_offset = body_length
+                    payload_offset = min(payload_offset, body_length)
                     future.set_result(
                         FileDownloadFrameMetadata(
                             response_code=response_code,
@@ -465,7 +467,9 @@ class BoundBaichuanUdpConnection(BaichuanUdpConnection):
             await self.connect()
         protocol = self._protocol
         if not isinstance(protocol, _IdempotentUdpClientProtocol):
-            raise RuntimeError("unexpected Baichuan UDP protocol")
+            raise RuntimeError(  # noqa: TRY004 - preserved download error contract.
+                "unexpected Baichuan UDP protocol"
+            )
         future = protocol.arm_file_download_probe(expected_msg_num)
         try:
             await self.send_without_wait(wire, cmd_id=13, timeout=min(timeout, 5.0))

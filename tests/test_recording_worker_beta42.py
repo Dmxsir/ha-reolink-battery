@@ -41,7 +41,9 @@ class Beta42FreshFirstQueueTests(unittest.TestCase):
         self.assertIn('"selection_policy": "newest_activated_fresh_first"', diagnostics)
         self.assertIn('"deferred_rearm_policy": "explicit_only"', diagnostics)
         version = json.loads(MANIFEST.read_text())["version"]
-        self.assertEqual(version, "1.3.7")
+        self.assertGreaterEqual(
+            tuple(int(part) for part in version.split(".")), (1, 3, 7)
+        )
 
 
 if __name__ == "__main__":

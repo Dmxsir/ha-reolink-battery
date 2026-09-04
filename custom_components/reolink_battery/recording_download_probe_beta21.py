@@ -13,16 +13,19 @@ from __future__ import annotations
 import asyncio
 import copy
 import os
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from . import recording_download_probe as base
 from . import recording_download_probe_beta17 as beta17
 from . import recording_download_probe_beta20 as beta20
-from .recording_download_probe_beta16 import _build_cmd13_wire as _beta16_build_cmd13_wire
+from .recording_download_probe_beta16 import (
+    _build_cmd13_wire as _beta16_build_cmd13_wire,
+)
 from .recording_probe import RecordingCandidate
 
 CONTENT_LAYOUT = "cmd13_id_prepare_then_cmd8_full_high_handle_mainstream"
@@ -214,6 +217,13 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
         self._cmd8_msg_num = msg_num
         return self._cmd8_wire, msg_num, len(body)
 
+    def _release_collected_media(self) -> None:
+        """Release the bounded collector after the active consumer is finished."""
+        self._aggregate = bytearray()
+
+    def _publish_result_trace(self) -> None:
+        _RESULT_TRACE.set(_clone_trace(self._stream_trace))
+
     async def send_file_download_probe(
         self,
         wire: bytes,
@@ -225,7 +235,9 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
             await self.connect()
         protocol = self._protocol
         if not isinstance(protocol, beta20._P2PHeartbeatProbeProtocol):
-            raise RuntimeError("unexpected beta21 Baichuan UDP protocol")
+            raise RuntimeError(  # noqa: TRY004 - preserved download error contract.
+                "unexpected beta21 Baichuan UDP protocol"
+            )
 
         trace = self._stream_trace
         first_future = protocol.arm_stream_probe(expected_msg_num, trace, self._observe_frame)
@@ -267,8 +279,7 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
                 if now - started_at >= beta20.STREAM_HARD_TIMEOUT:
                     reason = "hard_timeout"
                     break
-                last_frame_at = protocol._stream_last_frame_at
-                if last_frame_at and now - last_frame_at >= beta20.STREAM_IDLE_TIMEOUT:
+                if protocol.stream_idle_expired(now, beta20.STREAM_IDLE_TIMEOUT):
                     reason = "idle_timeout"
                     break
                 await asyncio.sleep(0.05)
@@ -295,7 +306,7 @@ class _FullHighCmd8Connection(beta20._P2PHeartbeatFullTransferConnection):
             self._cmd13_handle = None
             self._cmd8_wire = None
             self._cmd8_msg_num = None
-            self._aggregate = bytearray()
+            self._release_collected_media()
 
 
 def _build_cmd13_wire(baichuan: Any, uid: str, candidate: RecordingCandidate):
@@ -321,7 +332,7 @@ async def async_prepare_download_for_event(*args, **kwargs) -> DownloadFullHighP
         except base.CameraStageError as err:
             trace = _RESULT_TRACE.get()
             if trace is not None:
-                setattr(err, "stream_trace", _clone_trace(trace))
+                err.stream_trace = _clone_trace(trace)
             raise
         trace = _RESULT_TRACE.get() or _new_trace(attempted=True)
         if not trace.termination_reason:

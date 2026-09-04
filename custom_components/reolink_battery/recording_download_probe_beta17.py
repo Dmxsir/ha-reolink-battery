@@ -12,14 +12,17 @@ from __future__ import annotations
 import asyncio
 import copy
 import socket
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 from xml.etree import ElementTree as ET
 
 from . import recording_download_probe as base
 from . import transport as transport_mod
-from .recording_download_probe_beta16 import _build_cmd13_wire as _beta16_build_cmd13_wire
+from .recording_download_probe_beta16 import (
+    _build_cmd13_wire as _beta16_build_cmd13_wire,
+)
 from .recording_probe import RecordingCandidate
 
 CONTENT_LAYOUT = "fileinfo_id_only_no_extension_stream_shape"
@@ -230,6 +233,9 @@ class _StreamProbeProtocol(transport_mod._IdempotentUdpClientProtocol):
         return self._stream_first_future
 
     def clear_stream_probe(self) -> None:
+        for future in (self._stream_first_future, self._stream_stop_future):
+            if future is not None and not future.done():
+                future.cancel()
         self._stream_expected_msg_num = None
         self._stream_started = False
         self._stream_trace = None
@@ -273,8 +279,7 @@ class _StreamProbeProtocol(transport_mod._IdempotentUdpClientProtocol):
         payload_offset = (
             int.from_bytes(raw[20:24], "little") if header_length == 24 else 0
         )
-        if payload_offset > body_length:
-            payload_offset = body_length
+        payload_offset = min(payload_offset, body_length)
         body = raw[header_length : header_length + body_length]
         frame = _RawDownloadFrame(
             cmd_id=cmd_id,
@@ -305,7 +310,7 @@ class _StreamProbeProtocol(transport_mod._IdempotentUdpClientProtocol):
         if observer is not None:
             try:
                 observer(frame)
-            except Exception:
+            except Exception:  # noqa: BLE001 - an observer must not break RX parsing.
                 trace.unknown_frames += 1
 
         first = self._stream_first_future
@@ -385,7 +390,7 @@ class _StreamProbeConnection(transport_mod.BoundBaichuanUdpConnection):
             return None
         try:
             decoded = self._stream_decryptor(data, header, decode=False)
-        except Exception:
+        except Exception:  # noqa: BLE001 - third-party decryptors vary by firmware.
             return None
         return decoded if isinstance(decoded, bytes) else None
 
@@ -477,7 +482,9 @@ class _StreamProbeConnection(transport_mod.BoundBaichuanUdpConnection):
             await self.connect()
         protocol = self._protocol
         if not isinstance(protocol, _StreamProbeProtocol):
-            raise RuntimeError("unexpected beta17 Baichuan UDP protocol")
+            raise RuntimeError(  # noqa: TRY004 - preserved download error contract.
+                "unexpected beta17 Baichuan UDP protocol"
+            )
 
         trace = self._stream_trace
         first_future = protocol.arm_stream_probe(
@@ -547,7 +554,7 @@ async def async_prepare_download_for_event(*args, **kwargs) -> DownloadStreamPro
         except base.CameraStageError as err:
             trace = _RESULT_TRACE.get()
             if trace is not None:
-                setattr(err, "stream_trace", _clone_trace(trace))
+                err.stream_trace = _clone_trace(trace)
             raise
         trace = _RESULT_TRACE.get() or StreamProbeTrace(
             attempted=True,

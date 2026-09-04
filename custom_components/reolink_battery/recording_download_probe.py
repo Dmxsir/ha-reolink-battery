@@ -591,10 +591,17 @@ async def async_prepare_download_for_event(
     finally:
         try:
             if host is not None:
+                logout_result = "completed_best_effort"
                 try:
-                    await host.logout()
+                    async with asyncio.timeout(5.0):
+                        await host.logout()
                 except (ReolinkError, OSError, TimeoutError):
-                    pass
+                    logout_result = "failed_or_timed_out"
+                record_logout_result = getattr(
+                    connection, "record_logout_result", None
+                )
+                if callable(record_logout_result):
+                    record_logout_result(logout_result)
         finally:
             try:
                 if connection is not None and connection.connection_open:

@@ -64,8 +64,14 @@ class SingleLeaseConnectionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(connection._protocol.remote_port, 29998)
             self.assertEqual(connection._handoff_transaction_id, 666)
             self.assertEqual(connection._p2p_heartbeat_tid, 666)
+            self.assertGreater(
+                connection._udp_socket_receive_buffer_effective_bytes, 0
+            )
         finally:
-            await transport_mod.BaichuanBaseConnection.close(connection)
+            await connection.close()
+        self.assertTrue(connection._stream_trace.transport_cleanup_completed)
+        self.assertIsNone(connection._periodic_rx_ack_task)
+        self.assertIsNone(connection._p2p_heartbeat_task)
 
     async def test_consumed_handoff_never_falls_back_to_second_connect(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -77,7 +83,8 @@ class SingleLeaseConnectionTests(unittest.IsolatedAsyncioTestCase):
             "127.0.0.1", "127.0.0.1", 0, None, None, uid="ABC123", handoff_lease=lease
         )
         await connection.connect()
-        await transport_mod.BaichuanBaseConnection.close(connection)
+        await connection.close()
+        self.assertTrue(connection._stream_trace.transport_cleanup_completed)
         with self.assertRaises(transport_mod.ReolinkConnectionError):
             await connection.connect()
 

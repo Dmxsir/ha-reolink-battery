@@ -2,15 +2,16 @@
 
 The camera protocol is unchanged from beta.21: proven cmd13 Id-only/no-Extension
 prepare, returned handle, then cmd8 full-high/mainStream on the same authenticated
-UDP/P2P session.  This beta adds only local file persistence.  MP4 bytes are
-written to a private .part file as they arrive, fsynced, validated against the
-camera-reported size and ISO-BMFF ftyp header, then atomically renamed to .mp4.
+UDP/P2P session.  This beta adds only local file persistence.  Once collection
+ends, MP4 bytes are written off the event loop to a private .part file, fsynced,
+validated against the camera-reported size and ISO-BMFF ftyp header, then renamed.
 Incomplete or invalid .part files are removed.  No cmd9, automatic worker,
 queue removal, or Telegram is added here.
 """
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import os
@@ -18,7 +19,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from . import recording_download_probe_beta17 as beta17
 from . import recording_download_probe_beta21 as beta21
@@ -143,7 +143,7 @@ def _valid_mp4_head(head: bytes) -> bool:
 
 
 class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
-    """Beta.21 transport plus streaming .part persistence and atomic finalize."""
+    """Beta.21 transport plus executor-backed atomic MP4 persistence."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -151,9 +151,6 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
         self._output_dir: Path | None = None
         self._part_path: Path | None = None
         self._final_path: Path | None = None
-        self._part_fh = None
-        self._persisted_mp4_bytes = 0
-        self._sha256 = hashlib.sha256()
 
     def prepare_full_high_candidate(
         self,
@@ -200,40 +197,15 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
         stamp = candidate.start_time.strftime("%Y%m%d_%H%M%S")
         self._final_path = self._output_dir / f"reolink_{stamp}.mp4"
         self._part_path = self._output_dir / f"reolink_{stamp}.mp4.part"
-        self._part_fh = None
-        self._persisted_mp4_bytes = 0
-        self._sha256 = hashlib.sha256()
 
-    def _open_part(self) -> None:
+    def _prepare_output_path(self) -> None:
         if self._part_path is None or self._output_dir is None:
             raise RuntimeError("beta22 output path not prepared")
-        trace = self._stream_trace
-        trace.file_write_attempted = True
         self._output_dir.mkdir(parents=True, exist_ok=True)
         try:
             self._part_path.unlink()
         except FileNotFoundError:
             pass
-        self._part_fh = self._part_path.open("wb")
-        trace.part_created = True
-
-    def _persist_new_mp4_bytes(self) -> None:
-        fh = self._part_fh
-        trace = self._stream_trace
-        if fh is None or trace.mp4_offset is None:
-            return
-        available = max(len(self._aggregate) - trace.mp4_offset, 0)
-        if available <= self._persisted_mp4_bytes:
-            return
-        start = trace.mp4_offset + self._persisted_mp4_bytes
-        end = trace.mp4_offset + available
-        data = bytes(self._aggregate[start:end])
-        if not data:
-            return
-        fh.write(data)
-        self._sha256.update(data)
-        self._persisted_mp4_bytes += len(data)
-        trace.file_bytes_written = self._persisted_mp4_bytes
 
     def _apply_reported_size_collector_limits(self) -> None:
         """Resize verified collection from cmd13's authoritative file size.
@@ -261,8 +233,9 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
         super()._observe_frame(frame)
         if frame.cmd_id == 13 and frame.response_code in (0, 200):
             self._apply_reported_size_collector_limits()
-        if frame.cmd_id == 8 and frame.response_code in (0, 200):
-            self._persist_new_mp4_bytes()
+
+    def _release_collected_media(self) -> None:
+        """Retain media until the executor-backed finalizer has consumed it."""
 
     def _remove_part(self) -> None:
         path = self._part_path
@@ -274,25 +247,24 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
         except FileNotFoundError:
             pass
 
-    def _close_part(self) -> None:
-        fh = self._part_fh
-        self._part_fh = None
-        if fh is not None and not fh.closed:
-            fh.close()
-
-    def _finalize_verified_file(self) -> None:
+    def _finalize_verified_file(self, data: memoryview) -> None:
         trace = self._stream_trace
-        fh = self._part_fh
         part = self._part_path
         final = self._final_path
-        if fh is None or part is None or final is None:
-            raise RuntimeError("beta22 part file not open")
+        if part is None or final is None:
+            raise RuntimeError("beta22 output path not prepared")
 
-        self._persist_new_mp4_bytes()
-        fh.flush()
-        os.fsync(fh.fileno())
+        trace.file_write_attempted = True
+        with part.open("wb") as fh:
+            trace.part_created = True
+            written = fh.write(data)
+            trace.file_bytes_written = written
+            digest = hashlib.sha256()
+            digest.update(data)
+            trace.sha256_present = bool(digest.digest()) and written > 0
+            fh.flush()
+            os.fsync(fh.fileno())
         trace.fsync_completed = True
-        self._close_part()
 
         trace.final_size = part.stat().st_size
         with part.open("rb") as check:
@@ -305,8 +277,6 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
             and trace.final_size == expected
             and trace.file_bytes_written == expected
         )
-        trace.sha256_present = trace.final_size > 0
-
         if not (
             trace.expected_size_match
             and trace.final_size_match
@@ -329,6 +299,16 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
             pass
         trace.file_saved = final.is_file() and final.stat().st_size == expected
 
+    async def _async_finalize_collected_file(self) -> None:
+        trace = self._stream_trace
+        offset = trace.mp4_offset
+        data = (
+            memoryview(self._aggregate)[offset:]
+            if offset is not None
+            else memoryview(b"")
+        )
+        await asyncio.to_thread(self._finalize_verified_file, data)
+
     async def send_file_download_probe(
         self,
         wire: bytes,
@@ -336,21 +316,20 @@ class _VerifiedFileConnection(beta21._FullHighCmd8Connection):
         expected_msg_num: int,
         timeout: float = 10.0,
     ):
-        self._open_part()
+        await asyncio.to_thread(self._prepare_output_path)
         try:
             first = await super().send_file_download_probe(
                 wire, expected_msg_num=expected_msg_num, timeout=timeout
             )
-            self._finalize_verified_file()
+            await self._async_finalize_collected_file()
             beta21._RESULT_TRACE.set(_clone_trace(self._stream_trace))
             return first
         except BaseException:
-            self._close_part()
-            self._remove_part()
+            await asyncio.to_thread(self._remove_part)
             beta21._RESULT_TRACE.set(_clone_trace(self._stream_trace))
             raise
         finally:
-            self._close_part()
+            self._aggregate = bytearray()
 
 
 async def async_prepare_download_for_event(

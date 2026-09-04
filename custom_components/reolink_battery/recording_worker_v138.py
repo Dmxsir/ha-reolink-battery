@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from .recording_worker import (
     MAX_ATTEMPTS_PER_TRIGGER,
     RETRY_DELAYS_SECONDS,
+)
+from .recording_worker import (
     RecordingWorker as BaseRecordingWorker,
 )
 
@@ -98,9 +100,11 @@ class RecordingWorker(BaseRecordingWorker):
 
         rearmed = 0
         for event in pending:
-            if coordinator.is_event_deferred(event.event_id):
-                if await coordinator.async_rearm_event(event.event_id):
-                    rearmed += 1
+            if (
+                coordinator.is_event_deferred(event.event_id)
+                and await coordinator.async_rearm_event(event.event_id)
+            ):
+                rearmed += 1
 
         event_ids = {event.event_id for event in pending}
         self._manual_recovery_event_ids.update(event_ids)
@@ -279,7 +283,7 @@ class RecordingWorker(BaseRecordingWorker):
     def _classify_incomplete_stream_failure(self) -> bool:
         """Promote a verified partial transfer stop to a distinct failure.
 
-        Fast recovery is eligible only when media bytes were actually written,
+        Fast recovery is eligible only when media bytes were actually collected,
         cmd13 reported an authoritative expected size, and fewer bytes were
         collected than expected. The stop must then be either an explicit remote
         connection close or a stream idle timeout after transfer progress.
@@ -289,7 +293,11 @@ class RecordingWorker(BaseRecordingWorker):
         from .recording_download_beta22 import stream_probe_state
 
         trace = stream_probe_state(self._entry.entry_id)
-        file_bytes = int(getattr(trace, "file_bytes_written", 0) or 0)
+        received_bytes = int(
+            getattr(trace, "mp4_bytes_collected", 0)
+            or getattr(trace, "file_bytes_written", 0)
+            or 0
+        )
         expected_size = int(getattr(trace, "xml_reported_size", 0) or 0)
         remote_disconnect = bool(
             getattr(trace, "remote_disconnect_observed", False)
@@ -298,7 +306,7 @@ class RecordingWorker(BaseRecordingWorker):
             getattr(trace, "termination_reason", "") or ""
         )
 
-        partial = file_bytes > 0 and expected_size > file_bytes
+        partial = received_bytes > 0 and expected_size > received_bytes
         if not partial:
             return False
 
