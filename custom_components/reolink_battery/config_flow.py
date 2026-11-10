@@ -41,6 +41,7 @@ from .const import (
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
     CONF_NOTIFICATION_ENTITY,
+    CONF_NOTIFICATION_IDENTITY_ENTITY,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRES_AT,
     CONF_UID,
@@ -56,6 +57,9 @@ _LOGGER = logging.getLogger(__name__)
 _NOTIFICATION_OPTIONS_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_NOTIFICATION_ENTITY): EntitySelector(
+            EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_NOTIFICATION_IDENTITY_ENTITY): EntitySelector(
             EntitySelectorConfig(domain="sensor")
         ),
     }
@@ -266,7 +270,7 @@ class ReolinkBatteryConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class ReolinkBatteryOptionsFlow(OptionsFlowWithReload):
-    """Configure the optional HA Companion notification source."""
+    """Configure the optional HA Companion notification sources."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

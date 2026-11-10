@@ -21,6 +21,7 @@ CONF_DEVICE_PASSWORD = "device_password"
 CONF_INTERFACE = "interface"
 CONF_LOCAL_STATE = "local_state"
 CONF_NOTIFICATION_ENTITY = "notification_entity"
+CONF_NOTIFICATION_IDENTITY_ENTITY = "notification_identity_entity"
 
 AUTH_PATH_LEGACY = "legacy_local_credential"
 

@@ -27,6 +27,7 @@ from .const import (
     CONF_MFA_TRUST_TOKEN,
     CONF_MODEL,
     CONF_NOTIFICATION_ENTITY,
+    CONF_NOTIFICATION_IDENTITY_ENTITY,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRES_AT,
     CONF_UID,
@@ -131,7 +132,9 @@ async def async_setup_entry(
     runtime = ReolinkBatteryRuntime(cloud, coordinator, status)
     entry.runtime_data = runtime
 
-    notification_entity = getattr(entry, "options", {}).get(CONF_NOTIFICATION_ENTITY)
+    options = getattr(entry, "options", {})
+    notification_entity = options.get(CONF_NOTIFICATION_ENTITY)
+    notification_identity_entity = options.get(CONF_NOTIFICATION_IDENTITY_ENTITY)
     if isinstance(notification_entity, str) and notification_entity:
         from .notification_bridge import NotificationBridge
         from .recording_worker_v138 import RecordingWorker
@@ -165,6 +168,12 @@ async def async_setup_entry(
             entry.data[CONF_UID],
             ingest_notification,
             initial_event=initial_notification_event,
+            identity_entity_id=(
+                notification_identity_entity
+                if isinstance(notification_identity_entity, str)
+                and notification_identity_entity
+                else None
+            ),
         )
         runtime.notification_bridge.start()
 
