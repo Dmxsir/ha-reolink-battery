@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -134,6 +135,43 @@ async def async_get_config_entry_diagnostics(
                 if bridge and bridge.last_sensor_state_change_time
                 else None
             ),
+            "last_callback_decision": (
+                copy.deepcopy(bridge.last_callback_decision) if bridge else {}
+            ),
+            "recent_callback_decisions": (
+                copy.deepcopy(list(bridge.recent_callback_decisions))
+                if bridge
+                else []
+            ),
+            "recent_callback_decisions_limit": (
+                bridge.recent_callback_decisions.maxlen if bridge else 8
+            ),
+            "recent_callback_decisions_order": "oldest_to_newest",
+            "notification_identity_source_configured": bool(
+                bridge and bridge.identity_entity_id
+            ),
+            "notification_identity_listener_active": bool(
+                bridge and bridge.identity_listener_active
+            ),
+            "identity_sensor_state_change_count": (
+                bridge.identity_sensor_state_change_count if bridge else 0
+            ),
+            "last_identity_sensor_state_change_time": (
+                bridge.last_identity_sensor_state_change_time.isoformat()
+                if bridge and bridge.last_identity_sensor_state_change_time
+                else None
+            ),
+            "recent_notification_identity_observations": (
+                copy.deepcopy(list(bridge.recent_notification_identity_observations))
+                if bridge
+                else []
+            ),
+            "recent_notification_identity_observations_limit": (
+                bridge.recent_notification_identity_observations.maxlen
+                if bridge
+                else 16
+            ),
+            "recent_notification_identity_observations_order": "oldest_to_newest",
             "last_notification_post_time_ms": (
                 bridge.last_notification_post_time_ms if bridge else None
             ),
@@ -155,6 +193,32 @@ async def async_get_config_entry_diagnostics(
             ),
             "stale_repost_suppressed_count": (
                 bridge.stale_repost_suppressed_count if bridge else 0
+            ),
+            # Alarms hidden behind an Android group summary reach Last
+            # Notification without text; compare that count with the alarms
+            # Active Notification Count supplied instead.
+            "identity_ingestion_policy": (
+                "queue_alarms_missing_from_last_notification"
+            ),
+            "textless_reolink_notification_count": (
+                bridge.textless_reolink_notification_count if bridge else 0
+            ),
+            "identity_candidate_count": (
+                bridge.identity_candidate_count if bridge else 0
+            ),
+            "identity_recovered_event_count": (
+                bridge.identity_recovered_event_count if bridge else 0
+            ),
+            "identity_duplicate_count": (
+                bridge.identity_duplicate_count if bridge else 0
+            ),
+            "last_identity_recovered_event_time": (
+                bridge.last_identity_recovered_event_time.isoformat()
+                if bridge and bridge.last_identity_recovered_event_time
+                else None
+            ),
+            "last_identity_recovered_wake_permission": (
+                bridge.last_identity_recovered_wake_permission if bridge else None
             ),
         },
         "live_view": {

@@ -33,9 +33,9 @@
     "step": {
       "init": {
         "title": "Motion notification bridge",
-        "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Recording delivery is intentionally left to Home Assistant automations.",
-        "data": {"notification_entity": "Notification source entity"},
-        "data_description": {"notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge."}
+        "description": "Optionally select the Home Assistant Companion Last Notification sensor from the Android phone that receives Reolink alerts. Active Notification Count is an optional second source: it supplies Reolink alarms that Android hides behind a group summary, and feeds secret-safe identity diagnostics. Recording delivery is intentionally left to Home Assistant automations.",
+        "data": {"notification_entity": "Notification source entity", "notification_identity_entity": "Notification identity source entity"},
+        "data_description": {"notification_entity": "Select the Companion App Last Notification sensor. Leave empty to disable the notification bridge.", "notification_identity_entity": "Select the same phone's Active Notification Count sensor. It queues Reolink alarms that Last Notification reported without text; only Reolink entries are read."}
       }
     }
   },
