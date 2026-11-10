@@ -112,6 +112,13 @@ On the same Android phone:
    allowed application posts a notification.
 6. In Home Assistant go to **Settings -> Devices & services -> Reolink Battery -> Configure**
    and select that phone's **Last Notification** sensor.
+7. Recommended: on the same phone also enable **Active Notification Count** and
+   select it as **Notification identity source entity** in the same Configure
+   dialog. Android can bundle several Reolink alerts and hand Last Notification
+   only a group summary without text; the integration then takes the alarm from
+   Active Notification Count instead. That sensor lists every active
+   notification on the phone, including other apps; the integration reads only
+   the Reolink entries.
 
 Home Assistant Companion sensor documentation:
 https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
@@ -215,7 +222,9 @@ After the integration has been added, open:
 
 Select the Android phone's **Last Notification** sensor that you prepared in the
 Required section. The worker will listen to that entity without polling the
-phone or the camera.
+phone or the camera. If you enabled **Active Notification Count**, select it as
+the notification identity source so alerts hidden behind an Android group
+summary are still recorded.
 
 The integration selects a physical private IPv4 LAN and rejects `/32`
 VPN/Tailscale adapters. Setup validation resolves and wakes the selected camera,
@@ -438,6 +447,7 @@ https://support.reolink.com/articles/360004189214-How-to-Enable-Push-Notificatio
 4. פתח את הגדרות חיישן Last Notification והגדר את **Allow List** כך שתכלול את אפליקציית Reolink (`com.mcu.reolink`). מומלץ להשתמש ב־Allow List ולא לבטל את הדרישה לרשימה זו.
 5. לאחר הפעלת החיישן, גרום להתראת Reolink אחת להתקבל. חיישן התראות המשתמש ב־Allow List עשוי שלא להופיע כ־entity ב־Home Assistant עד שאפליקציה מאושרת מפרסמת התראה.
 6. ב־Home Assistant עבור אל **Settings -> Devices & services -> Reolink Battery -> Configure** ובחר את חיישן **Last Notification** של הטלפון.
+7. מומלץ: הפעל באותו טלפון גם את **Active Notification Count** ובחר אותו בשדה **ישות מקור זהות ההתראות** באותו חלון Configure. אנדרואיד עלול לקבץ כמה התראות Reolink ולהעביר ל־Last Notification רק סיכום קבוצה בלי טקסט; במקרה כזה האינטגרציה לוקחת את ההתראה מ־Active Notification Count. החיישן הזה מציג את כל ההתראות הפעילות בטלפון, גם של אפליקציות אחרות; האינטגרציה קוראת ממנו רק רשומות של Reolink.
 
 תיעוד חיישני Home Assistant Companion:
 https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
@@ -531,7 +541,7 @@ https://companion.home-assistant.io/docs/core/sensors/#notification-sensors
 
 **Settings -> Devices & services -> Reolink Battery -> Configure**
 
-בחר את חיישן **Last Notification** של טלפון ה־Android שהכנת בסעיף הדרישות. ה־worker יאזין ל־entity הזה ללא polling לטלפון או למצלמה.
+בחר את חיישן **Last Notification** של טלפון ה־Android שהכנת בסעיף הדרישות. ה־worker יאזין ל־entity הזה ללא polling לטלפון או למצלמה. אם הפעלת את **Active Notification Count**, בחר אותו כמקור זהות ההתראות, כדי שגם התראות שמוסתרות מאחורי סיכום קבוצה של אנדרואיד יוקלטו.
 
 האינטגרציה בוחרת ממשק LAN פיזי פרטי מסוג IPv4 ודוחה ממשקי VPN/Tailscale מסוג `/32`. בדיקת ההגדרה מאתרת ומעירה את המצלמה שנבחרה, מבצעת אימות ומתנתקת מיד.
 
